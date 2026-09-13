@@ -2,6 +2,7 @@ export class LocationMap {
   constructor(onSelect, actions, toast) {
     this.onSelect = onSelect;
     this.actions = actions;
+    this.toast = toast;
     if (!window.L) {
       toast("Map library unavailable. You can still enter coordinates.");
       return;
@@ -51,6 +52,18 @@ export class LocationMap {
     const label = document.createElement("div");
     label.textContent = `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`;
     popup.append(label);
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "Copy lat, long";
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(label.textContent);
+        this.toast("Coordinates copied");
+      } catch {
+        this.toast("Could not copy coordinates. Copy the coordinates shown above manually.");
+      }
+    };
+    popup.append(copy);
     for (const [title, action] of [
       ["Teleport here", "teleport"],
       ["Run here", "run"],

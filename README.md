@@ -303,8 +303,9 @@ from the game.
 
 ### Run to a map point
 
-Set an initial simulated location using Teleport, then select **Run** and click a map point.
+Set an initial simulated location using Teleport, then click a map point and press **Run here**.
 Movement starts from the current controlled position and follows a straight segment at the selected
-movement speed (including an active automatic speed schedule). Clicking another point redirects
-movement from the latest position without teleporting. Pause, Resume and Stop control the movement;
-it stops on arrival. Coordinate search and dragging the destination also select a new Run destination.
+movement speed (including an active automatic speed schedule). Selecting another point only previews
+the destination; press **Run here** to redirect movement from the latest position without teleporting.
+Pause, Resume and Stop control the movement; it stops on arrival. Coordinate search and dragging
+the destination also preview a point and require pressing **Run here** to move there.
