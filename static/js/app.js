@@ -82,7 +82,6 @@ const map = new LocationMap(
     destination = point;
     $("#destination-display").textContent =
       `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`;
-    if (mode === "run") runTo(point);
   },
   {
     teleport,
@@ -151,7 +150,7 @@ function setMode(next) {
   $("#json-controls").hidden = mode !== "route";
   $("#saved-list").replaceChildren();
   const help = {
-    run: "Set a starting location with Teleport first. Click the map to move straight to a destination at the selected speed. Click another point to change direction.",
+    run: "Set a starting location with Teleport first. Select a destination, then press Run here to move at the selected speed. Selecting another point only previews it; press Run here to change direction.",
     teleport:
       "Click anywhere on the map or enter coordinates to choose a destination.",
     joystick:
