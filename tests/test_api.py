@@ -187,3 +187,44 @@ def test_distance_counter_excludes_teleports_and_resets_independently(client):
     assert response.json()["distance_m"] == 0
     assert response.json()["speed_schedule"] == "target10k"
     assert response.json()["speed_schedule_elapsed"] == 42
+
+
+def test_run_requires_start_and_retargets_without_teleport(client):
+    from models.schemas import Coordinates
+    from services.movement_engine import distance
+
+    target = {**POINT, "latitude": POINT["latitude"] + 0.01}
+    assert client.post("/api/location/run", json=target).status_code == 503
+    connect(client)
+    assert client.post("/api/location/run", json=target).status_code == 422
+    client.post("/api/location/set", json=POINT)
+    state = client.app.state.controller.state
+    state.speed_kmh = 200
+    assert client.post("/api/location/run", json=target).json()["status"] == "running"
+    assert state.route.points[0] == Coordinates(**POINT)
+    assert distance(Coordinates(**POINT), state.position) < 30
+    assert state.speed_kmh == 200
+    assert client.post("/api/routes/pause").json()["status"] == "paused"
+    paused = state.position
+    replacement = {**POINT, "longitude": POINT["longitude"] + 0.01}
+    assert client.post("/api/location/run", json=replacement).status_code == 200
+    assert state.route.points == [paused, Coordinates(**replacement)]
+    assert distance(paused, state.position) < 30
+    assert client.post("/api/routes/stop").json()["status"] == "stopped"
+
+
+def test_run_moves_at_selected_speed_and_arrives(client):
+    from models.schemas import Coordinates
+    from services.movement_engine import distance
+
+    connect(client)
+    client.post("/api/location/set", json=POINT)
+    target = {**POINT, "latitude": POINT["latitude"] + 0.00001}
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "speed", "kmh": 5})
+        assert client.post("/api/location/run", json=target).status_code == 200
+        state = receive_type(ws, "location_state", lambda m: POINT["latitude"] < (m["latitude"] or 0) < target["latitude"])
+        assert state["speed_kmh"] == 5
+        receive_type(ws, "route_state", lambda m: m["status"] == "completed")
+        position = client.app.state.controller.state.position
+        assert distance(position, Coordinates(**target)) == pytest.approx(0)

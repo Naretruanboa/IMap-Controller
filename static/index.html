@@ -28,6 +28,7 @@
       <nav aria-label="Modes">
         <button class="active" data-mode="teleport">
           ↗ <span>Teleport</span><kbd>01</kbd></button
+        ><button data-mode="run">→ <span>Run</span></button
         ><button data-mode="joystick">
           ✥ <span>Joystick</span><kbd>02</kbd></button
         ><button data-mode="two">⌁ <span>Two Spot</span><kbd>03</kbd></button
@@ -154,6 +155,8 @@
             <button id="start-route" data-control class="primary wide">
               Start route
             </button>
+          </div>
+          <div id="motion-controls" hidden>
             <div class="row">
               <button id="pause-route" data-control>Pause</button
               ><button id="resume-route" data-control>Resume</button

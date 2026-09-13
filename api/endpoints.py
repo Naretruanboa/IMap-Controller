@@ -92,6 +92,23 @@ async def set_location(body: Coordinates, request: Request):
     return c.state.snapshot()
 
 
+@router.post("/api/location/run")
+async def run_to_location(body: Coordinates, request: Request):
+    c = controller(request)
+    async with c.state.lock:
+        s = c.state
+        s.require_connected()
+        if not s.position or not s.simulation_active:
+            raise ValueError("Set a starting location with Teleport first")
+        if s.restore_pending:
+            raise ValueError("Restore the pending simulated location before continuing")
+        route = RouteEngine([s.position, body])
+        s.stop()
+        s.route = route
+        c.broadcast()
+    return route.snapshot()
+
+
 @router.post("/api/location/clear")
 async def clear_location(request: Request):
     c = controller(request)

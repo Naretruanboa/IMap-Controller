@@ -62,6 +62,13 @@ const teleport = safe(async (point) => {
   await api("/api/location/set", point);
   toast("Simulated location updated");
 });
+const runTo = safe(async (point) => {
+  if (!connected || !online) throw new Error("Connect a device first");
+  if (!current?.simulation_active) throw new Error("Set a starting location with Teleport first");
+  stopJoystick();
+  await api("/api/location/run", point);
+  toast("Moving to destination at the selected speed");
+});
 const saveFavorite = safe(async (point) => {
   if (!point) throw new Error("Select a destination first");
   const name = prompt("Favorite name");
@@ -75,9 +82,14 @@ const map = new LocationMap(
     destination = point;
     $("#destination-display").textContent =
       `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`;
+    if (mode === "run") runTo(point);
   },
   {
     teleport,
+    run: (point) => {
+      setMode("run");
+      return runTo(point);
+    },
     route: safe((point) => {
       if (!["two", "route"].includes(mode)) setMode("route");
       plan.add(point, mode === "two");
@@ -122,6 +134,7 @@ function setMode(next) {
     .forEach((el) => el.classList.toggle("active", el.dataset.mode === mode));
   const titles = {
     teleport: "Teleport",
+    run: "Run",
     joystick: "Joystick",
     two: "Two Spot",
     route: "Multi Spot",
@@ -132,10 +145,13 @@ function setMode(next) {
   };
   $("#mode-title").textContent = titles[mode];
   $("#route-controls").hidden = !["two", "route", "gpx"].includes(mode);
+  $("#motion-controls").hidden = !["run", "two", "route", "gpx"].includes(mode);
+  $("#teleport").textContent = mode === "run" ? "Run here →" : "Teleport here ↗";
   $("#gpx-controls").hidden = mode !== "gpx";
   $("#json-controls").hidden = mode !== "route";
   $("#saved-list").replaceChildren();
   const help = {
+    run: "Set a starting location with Teleport first. Click the map to move straight to a destination at the selected speed. Click another point to change direction.",
     teleport:
       "Click anywhere on the map or enter coordinates to choose a destination.",
     joystick:
@@ -212,7 +228,7 @@ $("#restore").onclick = safe(async () => {
 });
 $("#teleport").onclick = safe(async () => {
   if (!destination) throw new Error("Select a destination first");
-  await teleport(destination);
+  await (mode === "run" ? runTo(destination) : teleport(destination));
 });
 $("#favorite").onclick = () => saveFavorite(destination);
 $("#search-form").onsubmit = safe(async (event) => {

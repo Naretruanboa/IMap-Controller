@@ -300,3 +300,11 @@ the counter. Use **รีเซ็ตระยะ** to start a fresh comparison 
 does not reset the Auto speed timer. Connecting a different device or restarting
 the server starts a new counter. This is the simulator's distance, not a reading
 from the game.
+
+### Run to a map point
+
+Set an initial simulated location using Teleport, then select **Run** and click a map point.
+Movement starts from the current controlled position and follows a straight segment at the selected
+movement speed (including an active automatic speed schedule). Clicking another point redirects
+movement from the latest position without teleporting. Pause, Resume and Stop control the movement;
+it stops on arrival. Coordinate search and dragging the destination also select a new Run destination.

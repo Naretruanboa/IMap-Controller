@@ -53,6 +53,7 @@ export class LocationMap {
     popup.append(label);
     for (const [title, action] of [
       ["Teleport here", "teleport"],
+      ["Run here", "run"],
       ["Add to route", "route"],
       ["Add favorite", "favorite"],
     ]) {
