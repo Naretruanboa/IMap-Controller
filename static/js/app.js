@@ -472,11 +472,11 @@ document
   .querySelectorAll("[data-speed]")
   .forEach((el) => (el.onclick = () => changeSpeed(Number(el.dataset.speed))));
 $("#custom-speed").onclick = safe(() => {
-  const raw = prompt("Speed in km/h (0.1–50)", $("#speed").value);
+  const raw = prompt("Speed in km/h (0.1–200)", $("#speed").value);
   if (raw === null) return;
   const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0.1 || value > 50)
-    throw new Error("Speed must be between 0.1 and 50 km/h");
+  if (!Number.isFinite(value) || value < 0.1 || value > 200)
+    throw new Error("Speed must be between 0.1 and 200 km/h");
   changeSpeed(value);
 });
 const loadSaved = safe(async () => {
@@ -604,11 +604,9 @@ const connection = new Connection(
         if (scheduleChanged) $("#speed-schedule").value = "target10k";
         const elapsed = Math.floor(message.speed_schedule_elapsed);
         $("#speed-schedule-status").textContent =
-          `Auto · ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")} / 60:00`;
+          `Auto · ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")} · Continuous`;
       } else if (scheduleChanged && $("#speed-schedule").value === "target10k") {
         cancelSpeedSchedule();
-        if (message.speed_schedule_elapsed >= 3600)
-          $("#speed-schedule-status").textContent = "Completed · 60:00";
       }
       controls();
     }

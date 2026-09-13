@@ -37,7 +37,7 @@ def test_bearing_and_distance(latitude, heading):
 
 
 def test_invalid_websocket_values():
-    for speed in [0, 51, float("nan")]:
+    for speed in [0, 200.1, float("nan")]:
         with pytest.raises(ValidationError):
             Speed(type="speed", kmh=speed)
     with pytest.raises(ValidationError):

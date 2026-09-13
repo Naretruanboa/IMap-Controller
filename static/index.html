@@ -227,7 +227,7 @@
           <div class="speed-meta"><span id="speed-schedule-status">Constant</span></div>
           <details class="speed-details">
             <summary>ปรับความเร็ว / รายละเอียด</summary>
-            <div class="range-label" id="target-speed-note" hidden>ค่อย ๆ เร่ง/ลด 5 ↔ 15 km/h ช่วงละ 30 วินาที · เฉลี่ย 10 km/h · นับเฉพาะเวลาเคลื่อนที่ ใช้เส้นทาง ≥10 กม. หรือวนเส้นทาง</div>
+            <div class="range-label" id="target-speed-note" hidden>ค่อย ๆ เร่ง/ลด 5 ↔ 15 km/h ช่วงละ 30 วินาที · เฉลี่ย 10 km/h · ทำงานต่อเนื่องหลังครบ 60 นาที · นับเฉพาะเวลาเคลื่อนที่ ใช้เส้นทาง ≥10 กม. หรือวนเส้นทาง</div>
             <div class="presets">
               <button data-speed="5" class="selected">Walk</button
               ><button data-speed="10">Run</button
@@ -239,13 +239,13 @@
               aria-label="Movement speed in km/h"
               type="range"
               min="0.1"
-              max="50"
+              max="200"
               step="0.1"
               value="5"
             />
             <div class="range-label">
               <span>0.1 km/h</span><span><span id="mps">1.39 m/s</span></span
-              ><span>50 km/h</span>
+              ><span>200 km/h</span>
             </div>
           </details>
         </section>

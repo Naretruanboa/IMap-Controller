@@ -111,8 +111,8 @@ def test_websocket_movement_speed_and_deadman(client):
     connect(client)
     client.post("/api/location/set", json=POINT)
     with client.websocket_connect("/ws") as ws:
-        ws.send_json({"type": "speed", "kmh": 10})
-        assert receive_type(ws, "location_state", lambda m: m["speed_kmh"] == 10)
+        ws.send_json({"type": "speed", "kmh": 200})
+        assert receive_type(ws, "location_state", lambda m: m["speed_kmh"] == 200)
         ws.send_json({"type": "movement", "bearing": 0, "active": True})
         changed = receive_type(ws, "location_state", lambda m: m["latitude"] > POINT["latitude"])
         assert changed["moving"]

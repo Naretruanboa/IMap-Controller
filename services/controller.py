@@ -105,9 +105,6 @@ class Controller:
                         try:
                             await s.set_position(point)
                             s.distance_m += travelled
-                            if s.speed_schedule == "target10k" and s.speed_schedule_elapsed >= 3600:
-                                s.stop()
-                                s.speed_schedule = "off"
                         except ConnectionError as exc:
                             self.publish({"type": "error", "code": "LOCATION_FAILED", "message": str(exc)})
                 self.broadcast()

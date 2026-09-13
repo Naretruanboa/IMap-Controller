@@ -50,10 +50,11 @@ async def test_worker_uses_provider_and_shuts_down(tmp_path):
 
 def test_target_schedule_covers_10km_in_60_minutes():
     s = AppState(MockLocationProvider(), speed_schedule="target10k")
-    meters = sum(s.movement_budget(0.37) for _ in range(9730))
+    meters = sum(s.movement_budget(0.5) for _ in range(7200))
     assert meters == pytest.approx(10000)
     assert s.speed_schedule_elapsed == 3600
-    assert s.movement_budget(1) == 0
+    assert s.movement_budget(3600) == pytest.approx(10000)
+    assert s.speed_schedule_elapsed == 7200
 
 
 def test_target_schedule_alternates_and_integrates_phase_boundary():
@@ -72,7 +73,7 @@ async def test_clear_resets_target_schedule():
     assert s.speed_schedule_elapsed == 0
 
 
-async def test_target_completion_stops_route(tmp_path):
+async def test_target_schedule_continues_route_after_60_minutes(tmp_path):
     from services.route_engine import RouteEngine
 
     c = Controller("mock", str(tmp_path / "target.db"), 20, 5)
@@ -85,10 +86,10 @@ async def test_target_completion_stops_route(tmp_path):
         c.state.speed_schedule = "target10k"
         c.state.speed_schedule_elapsed = 3599.99
         await asyncio.sleep(0.15)
-        assert c.state.speed_schedule_elapsed == 3600
-        assert c.state.speed_schedule == "off"
-        assert c.state.route.status == "stopped"
-        assert c.state.route.travelled == pytest.approx((5 + 0.01 / 6) / 3.6 * 0.01)
+        assert c.state.speed_schedule_elapsed > 3600
+        assert c.state.speed_schedule == "target10k"
+        assert c.state.route.status == "running"
+        assert c.state.route.travelled > (5 + 0.01 / 6) / 3.6 * 0.01
     finally:
         await c.close()
 

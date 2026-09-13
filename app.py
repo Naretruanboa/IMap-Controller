@@ -29,7 +29,7 @@ def create_app(provider: str | None = None, database: str | None = None) -> Fast
         mode = provider or os.getenv("GPS_PROVIDER", "iphone")
         hz = float(os.getenv("MOVEMENT_HZ", "10"))
         speed = float(os.getenv("DEFAULT_SPEED_KMH", "5"))
-        if mode not in ("mock", "iphone", "android") or not 5 <= hz <= 20 or not 0.1 <= speed <= 50:
+        if mode not in ("mock", "iphone", "android") or not 5 <= hz <= 20 or not 0.1 <= speed <= 200:
             raise ValueError("Invalid provider, movement frequency or default speed")
         c = Controller(mode, database or os.getenv("DATABASE_PATH", str(ROOT / "data/app.db")), hz, speed)
         app.state.controller = c

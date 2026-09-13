@@ -40,11 +40,18 @@ test("active broadcasts allow selecting a different schedule", () => {
   f.receive("target10k", 12);
   assert.equal(f.elements["#speed-schedule"].value, "steps");
 });
-test("server transitions still sync activation and completion", () => {
+test("server transitions still sync activation and cancellation", () => {
   const f = fixture("off", "off");
   f.receive("target10k");
   assert.equal(f.elements["#speed-schedule"].value, "target10k");
   f.receive("off", 3600);
   assert.equal(f.elements["#speed-schedule"].value, "off");
-  assert.equal(f.elements["#speed-schedule-status"].textContent, "Completed · 60:00");
+
+});
+
+test("target schedule displays continuous elapsed time after an hour", () => {
+  const f = fixture("target10k", "target10k");
+  f.receive("target10k", 3601);
+  assert.equal(f.elements["#speed-schedule"].value, "target10k");
+  assert.equal(f.elements["#speed-schedule-status"].textContent, "Auto · 60:01 · Continuous");
 });

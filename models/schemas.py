@@ -28,7 +28,7 @@ class Movement(BaseModel):
 class Speed(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     type: Literal["speed"]
-    kmh: float = Field(ge=0.1, le=50)
+    kmh: float = Field(ge=0.1, le=200)
     schedule: Literal["off", "target10k"] = "off"
 
 

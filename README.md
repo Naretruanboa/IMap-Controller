@@ -151,7 +151,7 @@ GPS_PROVIDER=android python app.py
 
 - **Teleport:** คลิกแผนที่หรือค้นหาพิกัด เช่น `13.7563, 100.5018` แล้วกด Teleport here ลาก destination marker เพื่อปรับตำแหน่งได้ คลิก marker เพื่อเปิดเมนู Teleport/Add to route/Add favorite ปุ่ม ◎ ด้านขวาใช้ตำแหน่งที่ browser บน Mac รายงานเพื่อเลือก destination (ต้องอนุญาต Location และไม่ใช่ GPS ที่อ่านจาก iPhone)
 - **Joystick:** ตั้งตำแหน่งเริ่มต้นด้วย Teleport ก่อน จากนั้นลาก joystick ได้ 360° หรือกด WASD/ลูกศร กดสองปุ่มเพื่อเคลื่อนแนวทแยง ไม่มีการขยับขณะพิมพ์ในช่อง input
-- **Speed:** Walk 5, Run 10, Bike 15 km/h หรือ Custom/slider 0.1–50 km/h แสดง m/s ด้วย ค่า speed อยู่ใน session ของอุปกรณ์
+- **Speed:** Walk 5, Run 10, Bike 15 km/h หรือ Custom/slider 0.1–200 km/h แสดง m/s ด้วย ค่า speed อยู่ใน session ของอุปกรณ์
 - **Two Spot:** เลือก A → Add destination → เลือก B → Add destination → Start route
 - **Multi Spot:** เพิ่มจุดตามลำดับ เลือกจำนวนรอบ แล้ว Start/Pause/Resume/Stop
 - **Multi Spot JSON:** ใช้ Export JSON เพื่อสำรอง waypoint และจำนวนรอบ หรือ Import JSON เพื่อแทนที่แผนปัจจุบัน รองรับสูงสุด 10,000 จุดและตรวจช่วง latitude/longitude ก่อนนำเข้า ทดลองได้ด้วย `examples/bangkok-waypoints.json`
@@ -176,7 +176,7 @@ GPS_PROVIDER=android python app.py
 | GPS_PROVIDER | iphone | iphone, android หรือ mock |
 | IOS_TRANSPORT | native บน macOS | native หรือ tunneld |
 | MOVEMENT_HZ | 10 | 5–20 Hz |
-| DEFAULT_SPEED_KMH | 5 | 0.1–50 km/h |
+| DEFAULT_SPEED_KMH | 5 | 0.1–200 km/h |
 | LOG_LEVEL | INFO | `DEBUG`, `INFO`, `WARNING`, `ERROR` หรือ `CRITICAL`; DEBUG แสดง HTTP method/path/status และ log การเชื่อมต่อ โดยไม่แสดง request body |
 | DATABASE_PATH | data/app.db | SQLite path |
 | ALLOWED_HOSTS | ว่าง | hostname เพิ่มเติม คั่น comma |
@@ -285,7 +285,7 @@ python tests/ui_smoke.py
 Under **MOVEMENT SPEED**, select **10 km / 60 min · Auto** and start a route
 of at least 10 km (or use route looping). The server gradually increases speed from 5 to 15 km/h over 30 seconds,
 then decreases back to 5 over the next 30 seconds, averaging 10 km/h. The schedule counts active movement time, pauses while idle or the route
-is paused, and stops movement after 60 active minutes. A shorter route still
+is paused, and continues automatically beyond 60 active minutes (10 km per active hour). A shorter route still
 ends at its endpoint. Manual speed changes cancel the schedule; restoring the
 location or switching devices resets it. Browser background timers do not control
 this mode. Device delays, disconnections, and pauses can extend wall-clock time.

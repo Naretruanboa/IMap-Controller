@@ -55,7 +55,7 @@ class AppState:
     def movement_budget(self, dt: float) -> float:
         if self.speed_schedule != "target10k":
             return self.speed_kmh / 3.6 * dt
-        end = min(3600.0, self.speed_schedule_elapsed + dt)
+        end = self.speed_schedule_elapsed + dt
         meters = 0.0
         while self.speed_schedule_elapsed < end:
             phase = int(self.speed_schedule_elapsed // 30)
