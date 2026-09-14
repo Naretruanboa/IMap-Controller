@@ -34,6 +34,8 @@
         ><button data-mode="two">⌁ <span>Two Spot</span><kbd>03</kbd></button
         ><button data-mode="route">
           ♧ <span>Multi Spot</span><kbd>04</kbd></button
+        ><button data-mode="random">
+          ⚄ <span>Random Walk</span><kbd>05</kbd></button
         ><button data-mode="gpx">⇧ <span>Import GPX</span></button
         ><button data-mode="favorites">☆ <span>Favorites</span></button
         ><button data-mode="history">◷ <span>History</span></button
@@ -155,6 +157,46 @@
             <button id="start-route" data-control class="primary wide">
               Start route
             </button>
+          </div>
+          <div id="random-controls" hidden>
+            <div class="row">
+              <button id="random-use-current" type="button">Use current location as center</button>
+              <button id="clear-random" class="quiet" type="button" title="Clear route, radius, and center pin">Clear</button>
+            </div>
+            <p class="muted">Click on the map or use the button above to set the center of the random patrol zone.</p>
+            <div class="field-group">
+              <label class="eyebrow" for="random-radius">RADIUS: <span id="random-radius-display">500 m</span></label>
+              <div class="presets radius-presets">
+                <button type="button" data-radius="100">100m</button>
+                <button type="button" data-radius="300">300m</button>
+                <button type="button" data-radius="500" class="selected">500m</button>
+                <button type="button" data-radius="1000">1 km</button>
+                <button type="button" data-radius="2000">2 km</button>
+                <button type="button" data-radius="5000">5 km</button>
+              </div>
+              <input id="random-radius" type="range" min="50" max="10000" step="50" value="500" aria-label="Random walk radius in meters" />
+            </div>
+            <div class="field-group">
+              <label class="eyebrow" for="random-points">WAYPOINTS PER CYCLE: <span id="random-points-display">5</span></label>
+              <input id="random-points" type="range" min="2" max="20" step="1" value="5" aria-label="Waypoints per random cycle" />
+            </div>
+            <label class="checkbox-label">
+              <input id="random-continuous" type="checkbox" checked />
+              <span>Auto-renew new route continuously (สุ่มต่ออัตโนมัติเมื่อครบรอบ)</span>
+            </label>
+            <div id="random-info" class="random-cycle-card" hidden>
+              <div class="eyebrow">RANDOM PATROL STATUS</div>
+              <div class="random-stats">
+                <div><span>CYCLE</span><strong id="random-cycle-val">#1</strong></div>
+                <div><span>WAYPOINT</span><strong id="random-waypoint-val">1/5</strong></div>
+                <div><span>TOTAL WALKED</span><strong id="random-walked-val">0 m</strong></div>
+              </div>
+            </div>
+            <div class="row">
+              <button id="preview-random" type="button" class="quiet" title="Generate guideline points on the map without starting">🎲 สุ่มดูเส้นทาง (Preview)</button>
+              <button id="start-random" data-control class="primary wide">Start Random Walk</button>
+              <button id="reroll-random" data-control class="quiet" title="Generate a new random route immediately">↻ Reroll</button>
+            </div>
           </div>
           <div id="motion-controls" hidden>
             <div class="row">

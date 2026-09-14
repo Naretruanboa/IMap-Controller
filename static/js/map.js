@@ -102,6 +102,15 @@ export class LocationMap {
   }
   route(points, onRemove) {
     if (!this.map) return;
+    if (!points || !points.length) {
+      this.clearRoute();
+      return;
+    }
+    const pointsKey = points
+      .map((p) => `${Number(p.latitude).toFixed(6)},${Number(p.longitude).toFixed(6)}`)
+      .join(";");
+    if (this._currentRouteKey === pointsKey) return;
+    this._currentRouteKey = pointsKey;
     this.polyline?.remove();
     this.waypoints?.remove();
     this.waypoints = L.layerGroup().addTo(this.map);
@@ -145,5 +154,41 @@ export class LocationMap {
   }
   center() {
     if (this.current) this.map.panTo(this.current.getLatLng());
+  }
+  setRadiusCircle(center, radius_m) {
+    if (!this.map || !center || center.latitude == null || center.longitude == null) return;
+    const latlng = [center.latitude, center.longitude];
+    if (!this.radiusCircle) {
+      this.radiusCircle = L.circle(latlng, {
+        radius: radius_m,
+        color: "#267c57",
+        fillColor: "#3da66c",
+        fillOpacity: 0.12,
+        weight: 1.5,
+        dashArray: "6 6",
+      }).addTo(this.map);
+    } else {
+      this.radiusCircle.setLatLng(latlng);
+      this.radiusCircle.setRadius(radius_m);
+    }
+  }
+  clearRadiusCircle() {
+    if (this.radiusCircle) {
+      this.radiusCircle.remove();
+      this.radiusCircle = null;
+    }
+  }
+  clearRoute() {
+    this._currentRouteKey = null;
+    this.polyline?.remove();
+    this.polyline = null;
+    this.waypoints?.remove();
+    this.waypoints = null;
+  }
+  clearDestination() {
+    if (this.destination) {
+      this.destination.remove();
+      this.destination = null;
+    }
   }
 }

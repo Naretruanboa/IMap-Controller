@@ -18,6 +18,14 @@ class RouteRequest(BaseModel):
     loops: int = Field(default=1, ge=0, le=1000)  # 0 = infinite
 
 
+class RandomRouteRequest(BaseModel):
+    center: Coordinates
+    radius_m: float = Field(default=500.0, ge=10.0, le=50000.0)
+    point_count: int = Field(default=5, ge=2, le=50)
+    continuous: bool = Field(default=True)
+    initial_points: list[Coordinates] | None = None
+
+
 class Movement(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     type: Literal["movement"]

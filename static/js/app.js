@@ -51,6 +51,7 @@ function controls() {
   $("#pause-route").disabled = !(connected && online && routeStatus === "running");
   $("#resume-route").disabled = !(connected && online && routeStatus === "paused");
   $("#stop-route").disabled = !(connected && online && ["running", "paused"].includes(routeStatus));
+  $("#reroll-random").disabled = !(connected && online && ["running", "paused"].includes(routeStatus));
   $("#joystick").setAttribute(
     "aria-disabled",
     String(!(connected && online && current?.simulation_active)),
@@ -60,6 +61,12 @@ const teleport = safe(async (point) => {
   if (!connected || !online) throw new Error("Connect a device first");
   stopJoystick();
   await api("/api/location/set", point);
+  map.clearRoute();
+  if (mode === "random") {
+    randomCenter = point;
+    destination = point;
+    map.setRadiusCircle(point, Number($("#random-radius").value));
+  }
   toast("Simulated location updated");
 });
 const runTo = safe(async (point) => {
@@ -77,11 +84,17 @@ const saveFavorite = safe(async (point) => {
   toast("Favorite saved");
   if (mode === "favorites") loadSaved();
 });
+let randomCenter = null;
 const map = new LocationMap(
   (point) => {
     destination = point;
     $("#destination-display").textContent =
       `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`;
+    if (mode === "random") {
+      randomCenter = point;
+      const radius = Number($("#random-radius").value);
+      map.setRadiusCircle(point, radius);
+    }
   },
   {
     teleport,
@@ -137,6 +150,7 @@ function setMode(next) {
     joystick: "Joystick",
     two: "Two Spot",
     route: "Multi Spot",
+    random: "Random Walk",
     gpx: "Import GPX",
     favorites: "Favorites",
     history: "History",
@@ -144,8 +158,10 @@ function setMode(next) {
   };
   $("#mode-title").textContent = titles[mode];
   $("#route-controls").hidden = !["two", "route", "gpx"].includes(mode);
-  $("#motion-controls").hidden = !["run", "two", "route", "gpx"].includes(mode);
+  $("#random-controls").hidden = mode !== "random";
+  $("#motion-controls").hidden = !["run", "two", "route", "gpx", "random"].includes(mode);
   $("#teleport").textContent = mode === "run" ? "Run here →" : "Teleport here ↗";
+  $("#teleport").parentElement.hidden = mode === "random";
   $("#gpx-controls").hidden = mode !== "gpx";
   $("#json-controls").hidden = mode !== "route";
   $("#saved-list").replaceChildren();
@@ -157,6 +173,8 @@ function setMode(next) {
       "Teleport to a starting point, then drag the joystick or hold WASD to move.",
     two: "Select point A and point B. Add each destination to your route.",
     route: "Select destinations and add waypoints in travel order.",
+    random:
+      "Set a center point and radius. The system will continuously generate and walk random routes within the designated boundary.",
     gpx: "Import a GPX track, route or waypoint list. Preview it before starting.",
     favorites: "Your saved locations, stored locally on this Mac.",
     history: "Recent teleports and route starts, stored locally on this Mac.",
@@ -170,15 +188,27 @@ function setMode(next) {
       ? "Connect your device."
       : mode === "joystick"
         ? "Keep moving."
-        : ["two", "route", "gpx"].includes(mode)
-          ? "Plan your journey."
-          : "Your next location.";
-  $("#panel-label").textContent = ["two", "route", "gpx"].includes(mode)
-    ? "ROUTE PLANNER"
-    : "LOCATION CONTROL";
+        : mode === "random"
+          ? "Random Radius Patrol."
+          : ["two", "route", "gpx"].includes(mode)
+            ? "Plan your journey."
+            : "Your next location.";
+  $("#panel-label").textContent = mode === "random"
+    ? "RANDOM WALK PATROL"
+    : ["two", "route", "gpx"].includes(mode)
+      ? "ROUTE PLANNER"
+      : "LOCATION CONTROL";
   if (mode === "two" && plan.points.length > 2) {
     plan.points = plan.points.slice(0, 2);
     plan.render();
+  }
+  if (mode === "random") {
+    const center = randomCenter || destination || (current?.simulation_active && current?.latitude != null ? current : null);
+    if (center) {
+      map.setRadiusCircle(center, Number($("#random-radius").value));
+    }
+  } else if (routeStatus !== "running" && routeStatus !== "paused") {
+    map.clearRadiusCircle();
   }
   if (["favorites", "history"].includes(mode)) loadSaved();
 }
@@ -383,6 +413,95 @@ $("#use-current").onclick = safe(() => {
   plan.add(current, mode === "two");
 });
 $("#loops").onchange = () => plan.render();
+function updateRandomRadius(radius) {
+  $("#random-radius").value = radius;
+  $("#random-radius-display").textContent = `${radius >= 1000 ? (radius / 1000).toFixed(1) + " km" : radius + " m"}`;
+  document.querySelectorAll(".radius-presets [data-radius]").forEach((btn) => {
+    btn.classList.toggle("selected", Number(btn.dataset.radius) === radius);
+  });
+  const center = randomCenter || destination || (current?.simulation_active && current?.latitude != null ? current : null);
+  if (center) {
+    map.setRadiusCircle(center, radius);
+  }
+}
+document.querySelectorAll(".radius-presets [data-radius]").forEach((btn) => {
+  btn.onclick = () => updateRandomRadius(Number(btn.dataset.radius));
+});
+$("#random-radius").oninput = (e) => {
+  updateRandomRadius(Number(e.target.value));
+};
+$("#random-points").oninput = (e) => {
+  $("#random-points-display").textContent = e.target.value;
+};
+$("#random-use-current").onclick = safe(() => {
+  if (!current?.simulation_active || current.latitude == null)
+    throw new Error("No controlled location available. Teleport or select a point on the map first.");
+  randomCenter = { latitude: current.latitude, longitude: current.longitude };
+  destination = randomCenter;
+  $("#destination-display").textContent = `${randomCenter.latitude.toFixed(6)}, ${randomCenter.longitude.toFixed(6)}`;
+  map.select(randomCenter, true);
+  map.setRadiusCircle(randomCenter, Number($("#random-radius").value));
+  toast("Set current location as random walk center");
+});
+let previewedRandomPoints = null;
+$("#preview-random").onclick = safe(async () => {
+  const center = randomCenter || destination || (current?.simulation_active && current?.latitude != null ? current : null);
+  if (!center) throw new Error("Select a center location on the map first");
+  const radius = Number($("#random-radius").value);
+  const points = Number($("#random-points").value);
+  map.setRadiusCircle(center, radius);
+  const data = await api("/api/routes/random/preview", {
+    center: { latitude: center.latitude, longitude: center.longitude },
+    radius_m: radius,
+    point_count: points,
+    continuous: $("#random-continuous").checked,
+  });
+  if (data?.points?.length) {
+    previewedRandomPoints = data.points;
+    map.route(data.points);
+    toast(`สุ่มสร้างเส้นทางตัวอย่าง ${data.points.length} จุดเรียบร้อย ตรวจสอบบนแผนที่แล้วกด Start เพื่อเริ่มเดิน`);
+  }
+});
+$("#start-random").onclick = safe(async () => {
+  const center = randomCenter || destination || (current?.simulation_active && current?.latitude != null ? current : null);
+  if (!center) throw new Error("Select a center location on the map first");
+  stopJoystick();
+  const radius = Number($("#random-radius").value);
+  const points = Number($("#random-points").value);
+  const continuous = $("#random-continuous").checked;
+  map.setRadiusCircle(center, radius);
+  const payload = {
+    center: { latitude: center.latitude, longitude: center.longitude },
+    radius_m: radius,
+    point_count: points,
+    continuous: continuous,
+  };
+  if (previewedRandomPoints && previewedRandomPoints.length === points) {
+    payload.initial_points = previewedRandomPoints;
+  }
+  await api("/api/routes/random", payload);
+  previewedRandomPoints = null;
+  toast(`Started random walk (${radius >= 1000 ? (radius / 1000).toFixed(1) + " km" : radius + " m"} radius)`);
+});
+$("#reroll-random").onclick = safe(async () => {
+  await api("/api/routes/random/reroll", {});
+  previewedRandomPoints = null;
+  toast("New random route generated");
+});
+$("#clear-random").onclick = safe(async () => {
+  if (["running", "paused"].includes(routeStatus)) {
+    await api("/api/routes/stop", {});
+  }
+  randomCenter = null;
+  destination = null;
+  previewedRandomPoints = null;
+  $("#destination-display").textContent = "No destination selected";
+  $("#random-info").hidden = true;
+  map.clearDestination();
+  map.clearRadiusCircle();
+  map.clearRoute();
+  toast("Cleared random walk and center pin. Click on the map to choose a new location.");
+});
 $("#start-route").onclick = safe(async () => {
   if (plan.points.length < 2) throw new Error("Add at least two waypoints first");
   if (mode === "two" && plan.points.length !== 2)
@@ -426,7 +545,7 @@ function speedDisplay(value) {
   $("#custom-speed").classList.toggle("selected", ![5, 10, 15].includes(value));
   if (plan.speed !== value) {
     plan.speed = value;
-    plan.render();
+    plan.render(false);
   }
 }
 const SPEED_SCHEDULES = {
@@ -628,8 +747,40 @@ const connection = new Connection(
     if (message.type === "route_state") {
       routeStatus = message.status;
       controls();
-      $("#route-status").textContent =
-        `${message.status}${message.distance_remaining !== undefined && message.distance_remaining !== null ? ` · ${message.distance_remaining.toFixed(0)} m remaining` : ""}${message.route_progress != null ? ` · ${(message.route_progress * 100).toFixed(0)}%` : ""}`;
+      if (message.route_type === "random" && ["running", "paused"].includes(message.status)) {
+        $("#random-info").hidden = false;
+        $("#random-cycle-val").textContent = `#${message.cycle || 1}`;
+        $("#random-waypoint-val").textContent = `${(message.current_segment || 0) + 1}/${message.point_count || message.points?.length || "?"}`;
+        const walked = message.total_travelled || 0;
+        $("#random-walked-val").textContent =
+          walked >= 1000 ? `${(walked / 1000).toFixed(3)} km` : `${walked.toFixed(0)} m`;
+        if (message.points?.length) {
+          map.route(message.points);
+        }
+        if (!randomCenter && message.center && message.radius_m) {
+          map.setRadiusCircle(message.center, message.radius_m);
+        }
+        $("#route-status").textContent = `Random Walk · Cycle #${message.cycle || 1} · ${message.status}`;
+      } else {
+        $("#random-info").hidden = true;
+        if (["stopped", "idle", "completed"].includes(message.status) && !previewedRandomPoints) {
+          map.clearRoute();
+          if (mode !== "random") {
+            map.clearRadiusCircle();
+          } else {
+            const center = randomCenter || destination;
+            if (center) {
+              map.setRadiusCircle(center, Number($("#random-radius").value));
+            } else {
+              map.clearRadiusCircle();
+            }
+          }
+        }
+        $("#route-status").textContent =
+          message.status === "idle"
+            ? "Ready to plan"
+            : `${message.status}${message.distance_remaining !== undefined && message.distance_remaining !== null ? ` · ${message.distance_remaining.toFixed(0)} m remaining` : ""}${message.route_progress != null ? ` · ${(message.route_progress * 100).toFixed(0)}%` : ""}`;
+      }
     }
     if (message.type === "error") toast(message.message);
   },
@@ -656,7 +807,7 @@ stopJoystick = setupJoystick(
     !current?.restore_pending,
 );
 controls();
-plan.render();
+if (["two", "route"].includes(mode)) plan.render();
 safe(async () => {
   const state = await api("/api/state");
   $("#provider").textContent = state.provider.toUpperCase();

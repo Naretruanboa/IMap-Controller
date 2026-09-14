@@ -43,19 +43,24 @@ export class RoutePlan {
     ];
     this.render();
   }
-  render() {
-    this.map.route(this.points, (index) => this.remove(index));
+  render(updateMap = true) {
+    if (updateMap) {
+      this.map.route(this.points, (index) => this.remove(index));
+    }
     const meters = this.points
       .slice(1)
       .reduce((sum, p, i) => sum + distance(this.points[i], p), 0);
-    const loops = Number(document.querySelector("#loops").value);
+    const loops = Number(document.querySelector("#loops")?.value || 1);
     const closure =
       this.points.length > 1 ? distance(this.points.at(-1), this.points[0]) : 0;
     const total = loops
       ? meters * loops + closure * Math.max(0, loops - 1)
       : meters + closure;
-    document.querySelector("#route-summary").textContent =
-      `${this.points.length} waypoints · ${(total / 1000).toFixed(2)} km${loops ? "" : " / cycle"} · ${Math.ceil(total / (this.speed / 3.6) / 60)} min`;
+    const summary = document.querySelector("#route-summary");
+    if (summary) {
+      summary.textContent =
+        `${this.points.length} waypoints · ${(total / 1000).toFixed(2)} km${loops ? "" : " / cycle"} · ${Math.ceil(total / (this.speed / 3.6) / 60)} min`;
+    }
     const list = document.querySelector("#waypoints");
     list.replaceChildren();
     this.points.slice(0, 50).forEach((p, index) => {

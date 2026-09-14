@@ -78,6 +78,7 @@ class AppState:
         self.owner = None
         if self.route and self.route.status in ("running", "paused"):
             self.route.status = "stopped"
+        self.route = None
 
     def require_connected(self) -> None:
         if self.status != "CONNECTED":

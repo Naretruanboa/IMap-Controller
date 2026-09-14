@@ -8,10 +8,19 @@ from contextlib import suppress
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from models.schemas import Coordinates, DeviceSelection, Favorite, GPXRequest, Movement, RouteRequest, Speed
+from models.schemas import (
+    Coordinates,
+    DeviceSelection,
+    Favorite,
+    GPXRequest,
+    Movement,
+    RandomRouteRequest,
+    RouteRequest,
+    Speed,
+)
 from services.geocoder import GeocodingError
 from services.gpx_parser import parse_gpx
-from services.route_engine import RouteEngine
+from services.route_engine import RandomRouteEngine, RouteEngine, generate_random_points
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -134,6 +143,72 @@ async def start_route(body: RouteRequest, request: Request):
     return route.snapshot()
 
 
+@router.post("/api/routes/random/preview")
+async def preview_random_route(body: RandomRouteRequest, request: Request):
+    c = controller(request)
+    start_pos = (
+        c.state.position
+        if (c.state.simulation_active and c.state.position is not None)
+        else body.center
+    )
+    points = generate_random_points(
+        center=body.center,
+        radius_m=body.radius_m,
+        count=body.point_count,
+        start=start_pos,
+    )
+    return {
+        "points": [p.model_dump() for p in points],
+        "center": body.center.model_dump(),
+        "radius_m": body.radius_m,
+    }
+
+
+@router.post("/api/routes/random")
+async def start_random_route(body: RandomRouteRequest, request: Request):
+    c = controller(request)
+    async with c.state.lock:
+        c.state.require_connected()
+        if c.state.restore_pending:
+            raise ValueError("Restore the pending simulated location before continuing")
+        start_pos = (
+            c.state.position
+            if (c.state.simulation_active and c.state.position is not None)
+            else body.center
+        )
+        route = RandomRouteEngine(
+            center=body.center,
+            radius_m=body.radius_m,
+            point_count=body.point_count,
+            continuous=body.continuous,
+            start_position=start_pos,
+            initial_points=body.initial_points,
+        )
+        c.state.stop()
+        if not c.state.position or not c.state.simulation_active:
+            await c.state.set_position(route.points[0])
+        c.state.route = route
+        c.db.record(body.center, f"Random route ({body.radius_m:.0f}m)")
+        c.broadcast()
+    logger.info("Random route started around %s with radius %.1fm", body.center, body.radius_m)
+    return route.snapshot()
+
+
+@router.post("/api/routes/random/reroll")
+async def reroll_random_route(request: Request):
+    c = controller(request)
+    async with c.state.lock:
+        c.state.require_connected()
+        route = c.state.route
+        if not isinstance(route, RandomRouteEngine):
+            raise ValueError("Active route is not a random route")
+        if not c.state.position:
+            raise ValueError("No active location available")
+        route.reroll(c.state.position)
+        c.broadcast()
+    return route.snapshot()
+
+
 @router.post("/api/routes/{action}")
 async def route_action(action: str, request: Request):
     if action not in ("pause", "resume", "stop"):
@@ -154,6 +229,10 @@ async def route_action(action: str, request: Request):
             route.status = "paused"
         else:
             route.status = "stopped"
+            snap = route.snapshot()
+            c.state.route = None
+            c.broadcast()
+            return snap
         c.broadcast()
     return route.snapshot()
 
