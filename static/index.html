@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Device GPS · Location Studio</title>
+    <title>Location Studio v2.5.0 · GPS & AI Catch</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css" />
     <link rel="stylesheet" href="/static/css/app.css" />
   </head>
@@ -69,18 +69,21 @@
       </section>
       <div class="sidebar-bottom">
         <span class="local-dot"></span> Runs locally on your Mac<small
-          >Developer Location Simulation</small
+          >Location Studio <strong>v2.5.0</strong> · AI & Auto-Catch</small
         >
       </div>
     </aside>
     <main>
       <header>
         <div>
-          <div class="eyebrow">LOCATION WORKSPACE</div>
+          <div class="eyebrow">LOCATION WORKSPACE · <span style="color:#00e5ff;font-weight:600;">v2.5.0</span></div>
           <h1 id="mode-title">Teleport</h1>
         </div>
-        <span id="socket-status" class="badge">Connecting…</span
-        ><button id="restore" class="restore">↶ Restore Real Location</button>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="badge" style="background:rgba(0,229,255,0.12);color:#00e5ff;border:1px solid rgba(0,229,255,0.3);font-weight:600;">v2.5.0</span>
+          <span id="socket-status" class="badge">Connecting…</span>
+          <button id="restore" class="restore">↶ Restore Real Location</button>
+        </div>
       </header>
       <div class="map-shell">
         <div id="map" aria-label="Interactive location map"></div>
