@@ -1,6 +1,6 @@
 [project]
 name = "iphone-gps-web-controller"
-version = "2.5.0"
+version = "2.6.0"
 description = "iPhone GPS Web Controller with AI Vision, PokéStop Auto-Spin & Native Auto-Catch Engine"
 authors = [{ name = "Naret" }]
 readme = "README.md"

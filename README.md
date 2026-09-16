@@ -1,6 +1,6 @@
-# iPhone GPS Web Controller `v2.5.0`
+# iPhone GPS Web Controller `v2.6.0`
 
-[![Version](https://img.shields.io/badge/version-v2.5.0-00e5ff.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-v2.6.0-00e5ff.svg)](pyproject.toml)
 [![AI Vision](https://img.shields.io/badge/AI_Vision-YOLOv8_ONNX-00b894.svg)](models/)
 [![Touch Engine](https://img.shields.io/badge/Touch_Engine-Native_Go_Zero--Fork-6c5ce7.svg)](scripts/touch_injector/)
 
