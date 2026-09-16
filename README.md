@@ -1,10 +1,10 @@
-# iPhone GPS Web Controller `v2.6.0`
+# Pokemon GO Controller `v2.6.0`
 
 [![Version](https://img.shields.io/badge/version-v2.6.0-00e5ff.svg)](pyproject.toml)
 [![AI Vision](https://img.shields.io/badge/AI_Vision-YOLOv8_ONNX-00b894.svg)](models/)
 [![Touch Engine](https://img.shields.io/badge/Touch_Engine-Native_Go_Zero--Fork-6c5ce7.svg)](scripts/touch_injector/)
 
-เครื่องมือ Developer Location Simulation & AI Vision Studio สำหรับทดสอบแอป iOS/Android ผ่าน USB และ ADB มี FastAPI backend, Web UI (Location Studio), YOLOv8 Object Detection, Auto-Catch & Native Zero-Fork Curveball Throw Engine รองรับ Mock Mode โดยไม่ต้องมีเครื่องจริง
+เครื่องมือ Developer Location Simulation & AI Vision Studio สำหรับทดสอบแอป iOS/Android ผ่าน USB และ ADB มี FastAPI backend, Web UI (Pokemon GO Controller), YOLOv8 Object Detection, Auto-Catch & Native Zero-Fork Curveball Throw Engine รองรับ Mock Mode โดยไม่ต้องมีเครื่องจริง
 
 รองรับ Android ผ่าน ADB Developer Mock Location ด้วย โดยใช้ test provider มาตรฐานของระบบและคืน provider/สิทธิ์เดิมเมื่อ disconnect ไม่มีระบบหลบการตรวจจับ mock location
 

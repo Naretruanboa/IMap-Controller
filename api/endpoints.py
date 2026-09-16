@@ -38,8 +38,8 @@ VERSION = "2.6.0"
 async def get_version():
     return {
         "version": VERSION,
-        "name": "Location Studio",
-        "description": "iPhone GPS Web Controller · AI Vision & Native Auto-Catch Edition",
+        "name": "Pokemon GO Controller",
+        "description": "Pokemon GO Controller · AI Vision & Native Auto-Catch Edition",
         "features": [
             "iOS & Android GPS Controller",
             "Joystick, Teleport & GPX Routing",

@@ -39,7 +39,7 @@ def create_app(provider: str | None = None, database: str | None = None) -> Fast
         finally:
             await c.close()
 
-    app = FastAPI(title="iPhone GPS Web Controller", lifespan=lifespan)
+    app = FastAPI(title="Pokemon GO Controller", lifespan=lifespan)
     hosts = ["127.0.0.1", "localhost", "[::1]", "testserver"]
     hosts.extend(filter(None, os.getenv("ALLOWED_HOSTS", "").split(",")))
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
