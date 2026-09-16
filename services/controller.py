@@ -105,6 +105,7 @@ class Controller:
                         try:
                             await s.set_position(point)
                             s.distance_m += travelled
+                            self.db.save_last_location(point, s.bearing)
                         except ConnectionError as exc:
                             self.publish({"type": "error", "code": "LOCATION_FAILED", "message": str(exc)})
                 self.broadcast()

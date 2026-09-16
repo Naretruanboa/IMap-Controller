@@ -37,6 +37,9 @@ def test_static_and_discovery(client):
         assert client.get(path).status_code == 200
     assert client.get("/api/devices").json()[0]["connection"] == "MOCK"
     assert client.get("/api/state").json()["device"]["connected"] is False
+    ver = client.get("/api/version").json()
+    assert ver["version"] == "2.5.0"
+    assert "features" in ver
 
 
 def test_place_search_endpoint(client):

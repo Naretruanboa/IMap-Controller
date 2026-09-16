@@ -2,6 +2,8 @@ import { Connection } from "./websocket.js";
 import { LocationMap } from "./map.js";
 import { RoutePlan } from "./route.js";
 import { setupJoystick } from "./joystick.js";
+import { detectStops } from "./stop_detector.js";
+import { SpinWorkflow, analyzeScreen, chooseCandidate } from "./spin_workflow.js";
 const $ = (s) => document.querySelector(s);
 let connected = false,
   online = false,
@@ -62,9 +64,12 @@ const teleport = safe(async (point) => {
   stopJoystick();
   await api("/api/location/set", point);
   map.clearRoute();
+  destination = point;
+  try {
+    localStorage.setItem("last_destination", JSON.stringify(point));
+  } catch (_) {}
   if (mode === "random") {
     randomCenter = point;
-    destination = point;
     map.setRadiusCircle(point, Number($("#random-radius").value));
   }
   toast("Simulated location updated");
@@ -151,6 +156,8 @@ function setMode(next) {
     two: "Two Spot",
     route: "Multi Spot",
     random: "Random Walk",
+    screen: "Screen Studio",
+    "ai-trainer": "AI Studio",
     gpx: "Import GPX",
     favorites: "Favorites",
     history: "History",
@@ -159,9 +166,11 @@ function setMode(next) {
   $("#mode-title").textContent = titles[mode];
   $("#route-controls").hidden = !["two", "route", "gpx"].includes(mode);
   $("#random-controls").hidden = mode !== "random";
-  $("#motion-controls").hidden = !["run", "two", "route", "gpx", "random"].includes(mode);
+  $("#screen-controls").hidden = mode !== "screen";
+  $("#ai-trainer-controls").hidden = mode !== "ai-trainer";
+  $("#motion-controls").hidden = !["run", "two", "route", "gpx", "random", "screen"].includes(mode);
   $("#teleport").textContent = mode === "run" ? "Run here →" : "Teleport here ↗";
-  $("#teleport").parentElement.hidden = mode === "random";
+  $("#teleport").parentElement.hidden = ["random", "screen", "ai-trainer"].includes(mode);
   $("#gpx-controls").hidden = mode !== "gpx";
   $("#json-controls").hidden = mode !== "route";
   $("#saved-list").replaceChildren();
@@ -175,6 +184,10 @@ function setMode(next) {
     route: "Select destinations and add waypoints in travel order.",
     random:
       "Set a center point and radius. The system will continuously generate and walk random routes within the designated boundary.",
+    screen:
+      "Live PokéStop detection with AI/Heuristics. Control GPS movement and Quick Spin directly on top of the live game map.",
+    "ai-trainer":
+      "Collect dataset, auto-label bounding boxes, and train offline YOLOv8 model directly from this browser.",
     gpx: "Import a GPX track, route or waypoint list. Preview it before starting.",
     favorites: "Your saved locations, stored locally on this Mac.",
     history: "Recent teleports and route starts, stored locally on this Mac.",
@@ -190,14 +203,22 @@ function setMode(next) {
         ? "Keep moving."
         : mode === "random"
           ? "Random Radius Patrol."
-          : ["two", "route", "gpx"].includes(mode)
-            ? "Plan your journey."
-            : "Your next location.";
+          : mode === "screen"
+            ? "Live PokéStop Detection."
+            : mode === "ai-trainer"
+              ? "Train PokéStop AI Model."
+              : ["two", "route", "gpx"].includes(mode)
+                ? "Plan your journey."
+                : "Your next location.";
   $("#panel-label").textContent = mode === "random"
     ? "RANDOM WALK PATROL"
-    : ["two", "route", "gpx"].includes(mode)
-      ? "ROUTE PLANNER"
-      : "LOCATION CONTROL";
+    : mode === "screen"
+      ? "SCREEN & AI VISION"
+      : mode === "ai-trainer"
+        ? "OFFLINE AI TRAINING STUDIO"
+        : ["two", "route", "gpx"].includes(mode)
+          ? "ROUTE PLANNER"
+          : "LOCATION CONTROL";
   if (mode === "two" && plan.points.length > 2) {
     plan.points = plan.points.slice(0, 2);
     plan.render();
@@ -209,6 +230,16 @@ function setMode(next) {
     }
   } else if (routeStatus !== "running" && routeStatus !== "paused") {
     map.clearRadiusCircle();
+  }
+  if (mode === "screen") {
+    $("#screen-overlay").hidden = false;
+    refreshScreenDevices();
+    captureAndDetectScreen();
+  }
+  if (mode === "ai-trainer") {
+    refreshDatasetStats();
+    refreshModelStatus();
+    pollTrainStatus();
   }
   if (["favorites", "history"].includes(mode)) loadSaved();
 }
@@ -713,6 +744,18 @@ const connection = new Connection(
     if (message.type === "location_state") {
       current = message;
       map.update(message);
+      if (message.latitude != null && message.longitude != null) {
+        const pt = { latitude: message.latitude, longitude: message.longitude };
+        try {
+          localStorage.setItem("last_location", JSON.stringify(pt));
+          if (!destination) {
+            destination = pt;
+            $("#destination-display").textContent =
+              `${pt.latitude.toFixed(6)}, ${pt.longitude.toFixed(6)}`;
+            map.select(pt, false, false);
+          }
+        } catch (_) {}
+      }
       $("#latitude").textContent = message.latitude?.toFixed(6) || "—";
       $("#longitude").textContent = message.longitude?.toFixed(6) || "—";
       $("#bearing").textContent = `${message.bearing.toFixed(0)}°`;
@@ -812,5 +855,836 @@ safe(async () => {
   const state = await api("/api/state");
   $("#provider").textContent = state.provider.toUpperCase();
   await refreshDevices();
+
+  // Restore last destination / coordinates on load
+  let restorePoint = null;
+  try {
+    const savedDest = localStorage.getItem("last_destination");
+    if (savedDest) {
+      const parsed = JSON.parse(savedDest);
+      if (Number.isFinite(parsed.latitude) && Number.isFinite(parsed.longitude)) {
+        restorePoint = parsed;
+      }
+    }
+  } catch (_) {}
+
+  if (!restorePoint && state.last_location) {
+    restorePoint = state.last_location;
+  }
+
+  if (restorePoint) {
+    destination = restorePoint;
+    $("#destination-display").textContent =
+      `${restorePoint.latitude.toFixed(6)}, ${restorePoint.longitude.toFixed(6)}`;
+    map.select(restorePoint, false, false);
+    if (mode === "random") {
+      randomCenter = restorePoint;
+      map.setRadiusCircle(restorePoint, Number($("#random-radius").value));
+    }
+  }
 })();
 setInterval(() => safe(refreshDevices)(), 5000);
+
+/* =========================================================================
+   Screen Studio & Live Detection (Floating Overlay + GPS Control)
+   ========================================================================= */
+let screenFrameBitmap = null;
+let screenBusy = false;
+let screenLiveTimer = null;
+let currentScreenBoxes = [];
+let activeSpinWorkflow = null;
+let lastSpinTimestamp = 0;
+
+function syncLiveToggles(isLive) {
+  if ($("#screen-live-chk")) $("#screen-live-chk").checked = isLive;
+  if ($("#screen-live-toggle")) $("#screen-live-toggle").checked = isLive;
+}
+
+function syncAutoSpinToggles(isAuto) {
+  if ($("#screen-auto-spin-chk")) $("#screen-auto-spin-chk").checked = isAuto;
+  if ($("#screen-auto-spin-toggle")) $("#screen-auto-spin-toggle").checked = isAuto;
+}
+
+function syncAutoCatchToggles(isAuto) {
+  if ($("#screen-auto-catch-chk")) $("#screen-auto-catch-chk").checked = isAuto;
+  if ($("#screen-auto-catch-toggle")) $("#screen-auto-catch-toggle").checked = isAuto;
+  if ($("#throw-auto-catch-chk")) $("#throw-auto-catch-chk").checked = isAuto;
+}
+
+function isLiveEnabled() {
+  return Boolean($("#screen-live-chk")?.checked || $("#screen-live-toggle")?.checked);
+}
+
+function isAutoSpinEnabled() {
+  return Boolean($("#screen-auto-spin-chk")?.checked || $("#screen-auto-spin-toggle")?.checked);
+}
+
+function isAutoCatchEnabled() {
+  return Boolean(
+    $("#screen-auto-catch-chk")?.checked ||
+    $("#screen-auto-catch-toggle")?.checked ||
+    $("#throw-auto-catch-chk")?.checked
+  );
+}
+
+async function refreshScreenDevices() {
+  try {
+    const list = await api("/api/screen/devices");
+    const select = $("#screen-device-select");
+    if (!select) return;
+    const prev = select.value;
+    select.replaceChildren();
+    if (!list.length) {
+      select.add(new Option("No Android device (ADB)", ""));
+    }
+    for (const serial of list) {
+      select.add(new Option(serial, serial));
+    }
+    if (list.includes(prev)) select.value = prev;
+    const statusText = $("#screen-status-text");
+    if (statusText) {
+      statusText.textContent = list.length
+        ? "พร้อมจับภาพ — เลือกอุปกรณ์และกด 'จับภาพ' หรือเปิด Live"
+        : "ไม่พบ Android ที่เชื่อมต่อ (กรุณาเปิด ADB บน Emulator หรือเสียบสาย USB)";
+    }
+  } catch (err) {
+    const statusText = $("#screen-status-text");
+    if (statusText) statusText.textContent = err.message;
+  }
+}
+
+async function detectScreenBoxes(frameBitmap, serial, engine) {
+  if (engine === "ai" && serial) {
+    try {
+      const res = await api(`/api/screen/detect_stops?serial=${encodeURIComponent(serial)}&engine=ai`);
+      if (res.ok && res.boxes && res.boxes.length > 0) {
+        return res.boxes;
+      }
+    } catch (e) {
+      console.warn("AI detection fallback to local heuristic:", e);
+    }
+  }
+
+  // Heuristic / fallback local detection
+  const work = document.createElement("canvas");
+  work.width = Math.min(900, frameBitmap.width);
+  work.height = Math.round((frameBitmap.height * work.width) / frameBitmap.width);
+  const wc = work.getContext("2d", { willReadFrequently: true });
+  wc.drawImage(frameBitmap, 0, 0, work.width, work.height);
+  const rawBoxes = detectStops(wc.getImageData(0, 0, work.width, work.height), 12);
+  const sx = frameBitmap.width / work.width;
+  const sy = frameBitmap.height / work.height;
+  return rawBoxes.map((b) => ({
+    ...b,
+    x: Math.round(b.x * sx),
+    y: Math.round(b.y * sy),
+    width: Math.round(b.width * sx),
+    height: Math.round(b.height * sy),
+    targetX: Math.round(b.targetX * sx),
+    targetY: Math.round(b.targetY * sy),
+  }));
+}
+
+async function renderScreenCanvas(boxes) {
+  const canvas = $("#live-screen-canvas");
+  if (!canvas || !screenFrameBitmap) return;
+  const ctx = canvas.getContext("2d");
+  canvas.width = screenFrameBitmap.width;
+  canvas.height = screenFrameBitmap.height;
+  ctx.drawImage(screenFrameBitmap, 0, 0);
+  canvas.hidden = false;
+  $("#screen-empty-placeholder").hidden = true;
+
+  const threshold = Number($("#screen-threshold").value);
+  const showRejected = $("#screen-show-all-chk")?.checked;
+  const sx = screenFrameBitmap.width / 900.0;
+  ctx.lineWidth = Math.max(2, sx * 3);
+  ctx.font = `bold ${Math.round(13 * Math.max(1, sx))}px sans-serif`;
+
+  const visible = boxes
+    .filter((b) => b.kind === "ring" || b.kind === "pokemon" || b.eligible || showRejected)
+    .sort((a, b) => b.score - a.score);
+  visible.forEach((box, index) => {
+    const x = Math.max(0, box.x - 4),
+      y = Math.max(0, box.y - 4),
+      w = box.width + 8,
+      h = box.height + 8;
+    const color =
+      box.kind === "pokemon" || box.class_name === "pokemon"
+        ? "#f59e0b"
+        : box.kind === "solid"
+          ? "#c2c9ce"
+          : box.color === "purple" || box.class_name === "pokestop_cooldown"
+            ? "#c88aff"
+            : box.score >= threshold
+              ? "#49ef88"
+              : "#ffdb38";
+    ctx.strokeStyle = color;
+    ctx.strokeRect(x, y, w, h);
+    const tagW = Math.max(100, 120 * sx);
+    ctx.fillStyle = color;
+    ctx.fillRect(x, Math.max(0, y - 20 * sx), tagW, 20 * sx);
+    ctx.fillStyle = box.kind === "pokemon" || box.class_name === "pokemon" ? "#ffffff" : "#18251d";
+    const labelPrefix = box.class_name === "pokemon" ? "★ Pokemon" : box.class_name ? box.class_name : "";
+    ctx.fillText(
+      `#${index + 1} ${labelPrefix} ${box.score}%`,
+      x + 4,
+      Math.max(15 * sx, y - 4 * sx),
+    );
+  });
+
+  const eligibleStops = boxes.filter((b) => b.eligible && b.class_name === "pokestop_active" && b.score >= threshold).length;
+  const pokemonCount = boxes.filter((b) => b.class_name === "pokemon" || b.kind === "pokemon").length;
+  $("#screen-overlay-badge").textContent = `${eligibleStops} เสาฟ้า · ${pokemonCount} โปเกมอน`;
+  const listContainer = $("#screen-detected-list");
+  if (listContainer) {
+    listContainer.replaceChildren();
+    visible.forEach((box, idx) => {
+      const isPoke = box.class_name === "pokemon" || box.kind === "pokemon";
+      const item = document.createElement("div");
+      item.className = "detected-stop-item";
+      item.innerHTML = `
+        <div class="stop-badge ${isPoke ? "pokemon" : box.eligible && box.score >= threshold ? "active" : "inactive"}">#${idx + 1}</div>
+        <div class="stop-details">
+          <div class="stop-title">${isPoke ? "🌟 โปเกมอนป่า (Wild Pokémon)" : box.class_name || (box.color === "purple" ? "เสาคูลดาวน์ (ม่วง)" : "เสาพร้อมหมุน (ฟ้า)")} · <strong>${box.score}%</strong></div>
+          <div class="stop-reason hint">${box.reason || `พิกัด (${box.targetX || box.x}, ${box.targetY || box.y})`}</div>
+        </div>
+      `;
+      item.onclick = () => {
+        const normTarget = {
+          x: (box.targetX || box.x + box.width / 2) / screenFrameBitmap.width,
+          y: (box.targetY || box.y + box.height / 2) / screenFrameBitmap.height,
+        };
+        if (isPoke) {
+          toast(`แตะที่โปเกมอน #${idx + 1} เพื่อเข้าหน้าจับ...`);
+          // Send direct tap to encounter pokemon
+          const serial = $("#screen-device-select")?.value;
+          if (serial) {
+            api("/api/screen/tap", {
+              serial: serial,
+              x: normTarget.x,
+              y: normTarget.y
+            }).then(() => {
+              appendSpinLog("encounter", `แตะโปเกมอนที่ (${Math.round(normTarget.x * 100)}%, ${Math.round(normTarget.y * 100)}%)`);
+            });
+          }
+        } else {
+          runQuickSpinWorkflow(normTarget);
+        }
+      };
+      listContainer.append(item);
+    });
+  }
+}
+
+function appendSpinLog(step, message) {
+  const timestamp = new Date().toLocaleTimeString();
+  const logLine = `[${timestamp}] [${step.toUpperCase()}] ${message}`;
+
+  const spinLogEl = $("#screen-spin-log");
+  if (spinLogEl) {
+    if (spinLogEl.textContent.trim() === "พร้อมบันทึกการทำงาน…") {
+      spinLogEl.textContent = logLine;
+    } else {
+      const lines = spinLogEl.textContent.split("\n");
+      if (lines.length > 100) lines.shift();
+      lines.push(logLine);
+      spinLogEl.textContent = lines.join("\n");
+    }
+    spinLogEl.scrollTop = spinLogEl.scrollHeight;
+  }
+
+  const overlayLogEl = $("#screen-overlay-log");
+  if (overlayLogEl) {
+    overlayLogEl.textContent = `⚡ [${step}] ${message}`;
+  }
+
+  const statusText = $("#screen-status-text");
+  if (statusText) {
+    statusText.textContent = `[${step}] ${message}`;
+  }
+}
+
+let activeCatchWorkflow = false;
+let lastCatchTimestamp = 0;
+
+async function captureAndDetectScreen() {
+  if (screenBusy || activeSpinWorkflow?.running || activeCatchWorkflow) return;
+  const serial = $("#screen-device-select")?.value;
+  if (!serial) return;
+  screenBusy = true;
+  clearTimeout(screenLiveTimer);
+  try {
+    const res = await fetch(`/api/screen/capture?serial=${encodeURIComponent(serial)}`, { cache: "no-store" });
+    if (!res.ok) throw new Error("Capture failed");
+    const blob = await res.blob();
+    const nextBitmap = await createImageBitmap(blob);
+    screenFrameBitmap?.close();
+    screenFrameBitmap = nextBitmap;
+
+    const engine = $("#screen-engine-select")?.value || "ai";
+    currentScreenBoxes = await detectScreenBoxes(screenFrameBitmap, serial, engine);
+    await renderScreenCanvas(currentScreenBoxes);
+    const eligibleStops = currentScreenBoxes.filter((b) => b.eligible);
+    const statusMsg = `ตรวจพบเสาพร้อมหมุน ${eligibleStops.length} จุด (${engine === "ai" ? "AI Model" : "Heuristic"})`;
+    $("#screen-status-text").textContent = statusMsg;
+
+    // Auto-Catch trigger: check if encounter screen is active
+    if (isAutoCatchEnabled() && !activeCatchWorkflow && !activeSpinWorkflow?.running && Date.now() - lastCatchTimestamp > 3000) {
+      try {
+        const enc = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+        if (enc.is_encounter) {
+          appendSpinLog("auto-catch", "🎯 ตรวจพบหน้าจอ Encounter — กำลังเริ่มโยน Pokéball อัตโนมัติ...");
+          setTimeout(() => runAutoCatchWorkflow(serial), 100);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    // Auto-Spin trigger
+    if (isAutoSpinEnabled() && !activeSpinWorkflow?.running && !activeCatchWorkflow && Date.now() - lastSpinTimestamp > 5000) {
+      const candidate = chooseCandidate(screenFrameBitmap, currentScreenBoxes);
+      if (candidate) {
+        appendSpinLog("auto-spin", "พบเสาพร้อมหมุนในระยะ — กำลังเริ่มหมุนอัตโนมัติ...");
+        setTimeout(() => runQuickSpinWorkflow(candidate), 100);
+      }
+    }
+  } catch (err) {
+    console.warn("Screen capture error:", err);
+    $("#screen-status-text").textContent = `เกิดข้อผิดพลาด: ${err.message}`;
+  } finally {
+    screenBusy = false;
+    const shouldKeepPolling = (isLiveEnabled() || isAutoCatchEnabled() || isAutoSpinEnabled()) && !document.hidden && !activeSpinWorkflow?.running && !activeCatchWorkflow;
+    if (shouldKeepPolling) {
+      screenLiveTimer = setTimeout(captureAndDetectScreen, 3000);
+    }
+  }
+}
+
+async function runAutoCatchWorkflow(serial) {
+  if (activeCatchWorkflow || !serial) return;
+  activeCatchWorkflow = true;
+  lastCatchTimestamp = Date.now();
+  clearTimeout(screenLiveTimer);
+
+  const statusEl = $("#encounter-status");
+  if (statusEl) {
+    statusEl.innerHTML = `🎯 <strong>พบหน้าจอ Encounter!</strong> กำลังโยน Pokéball อัตโนมัติ...`;
+    statusEl.style.color = "#2ecc71";
+  }
+
+  appendSpinLog("catch", "🎯 ตรวจพบหน้าจอ Encounter! เริ่มระบบโยนบอลอัตโนมัติ...");
+  throwLog("🎯 [Auto-Catch] ตรวจพบหน้าจอ Encounter! เริ่มต้นโยน Pokéball...");
+
+  let attempts = 0;
+  const maxAttempts = 20;
+
+  while (isAutoCatchEnabled() && attempts < maxAttempts) {
+    attempts++;
+    try {
+      // 1. Verify we're on encounter screen before throwing
+      const enc = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+      if (!enc.is_encounter) {
+        throwLog(`🎉 ไม่พบหน้า Encounter แล้ว — การจับเสร็จสิ้น!`);
+        appendSpinLog("catch", `🎉 การจับเสร็จสิ้น`);
+        toast("🎉 จบ Encounter แล้ว!");
+        if (statusEl) {
+          statusEl.innerHTML = `✅ จบการจับ Pokémon (โยน ${attempts - 1} ครั้ง)`;
+          statusEl.style.color = "#2ecc71";
+        }
+        break;
+      }
+
+      const strength = Number($("#throw-strength")?.value || 50) / 100;
+      const curveball = $("#throw-curveball") ? $("#throw-curveball").checked : true;
+      const modeText = curveball ? "Curveball" : "Straight";
+
+      throwLog(`🔴 [Auto-Catch] โยนครั้งที่ ${attempts} (${modeText} ${Math.round(strength * 100)}%)...`);
+      appendSpinLog("throw", `[Auto-Catch] โยน ${modeText} ครั้งที่ ${attempts}...`);
+
+      const res = await api("/api/screen/throw_ball", { serial, strength, curveball });
+      throwLog(`✅ โยนสำเร็จ (${res.action})`);
+
+      // 2. Wait for ball shake / breakout / catch resolution (poll up to 10s)
+      throwLog("⏳ กำลังรอผลการจับ (รอแอนิเมชันสั่นลูกบอล)...");
+
+      let brokeOut = false;
+      // Check every 1.5s up to 10 seconds
+      for (let poll = 0; poll < 6; poll++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (!isAutoCatchEnabled()) break;
+        try {
+          const check = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+          if (check.is_encounter) {
+            brokeOut = true;
+            throwLog(`⚠️ Pokémon หลุดออกจากลูกบอล! กำลังเตรียมโยนรอบที่ ${attempts + 1}...`);
+            appendSpinLog("catch", `Pokémon หลุดจากลูกบอล — โยนซ้ำ`);
+            break;
+          }
+        } catch (_) {}
+      }
+
+      if (!brokeOut) {
+        // If after polling window, encounter screen never returned -> Pokémon caught or fled!
+        const finalMsg = `🎉 จับ Pokémon สำเร็จหรือจบการต่อสู้! (โยน ${attempts} ครั้ง)`;
+        throwLog(finalMsg);
+        appendSpinLog("catch", finalMsg);
+        toast("🎉 จบการต่อสู้!");
+        if (statusEl) {
+          statusEl.innerHTML = `✅ ${finalMsg}`;
+          statusEl.style.color = "#2ecc71";
+        }
+        // Tap bottom center twice to dismiss any Gotcha / summary overlay
+        try {
+          await api("/api/screen/input", { serial, action: "tap", x: 0.5, y: 0.92 });
+          await new Promise((r) => setTimeout(r, 800));
+          await api("/api/screen/input", { serial, action: "tap", x: 0.5, y: 0.92 });
+        } catch (_) {}
+        break;
+      }
+    } catch (err) {
+      throwLog(`⚠️ Auto-Catch error: ${err.message || err}`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+
+  activeCatchWorkflow = false;
+  lastCatchTimestamp = Date.now();
+
+  const shouldKeepPolling = (isLiveEnabled() || isAutoCatchEnabled() || isAutoSpinEnabled()) && !document.hidden;
+  if (shouldKeepPolling) {
+    screenLiveTimer = setTimeout(captureAndDetectScreen, 2000);
+  }
+}
+
+async function runQuickSpinWorkflow(specificTarget = null) {
+  const serial = $("#screen-device-select")?.value;
+  if (!serial) {
+    appendSpinLog("error", "กรุณาเลือกอุปกรณ์ Android ก่อนหมุนเสา");
+    return;
+  }
+  if (activeSpinWorkflow?.running) {
+    appendSpinLog("busy", "กำลังดำเนินการหมุนเสาอยู่แล้ว");
+    return;
+  }
+
+  lastSpinTimestamp = Date.now();
+  clearTimeout(screenLiveTimer);
+
+  activeSpinWorkflow = new SpinWorkflow({
+    currentBoxes: currentScreenBoxes,
+    capture: async () => {
+      const res = await fetch(`/api/screen/capture?serial=${encodeURIComponent(serial)}`, { cache: "no-store" });
+      if (!res.ok) throw new Error("Capture failed during workflow");
+      const blob = await res.blob();
+      const bmp = await createImageBitmap(blob);
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = bmp.width;
+      tempCanvas.height = bmp.height;
+      const ctx = tempCanvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(bmp, 0, 0);
+      const imgData = ctx.getImageData(0, 0, bmp.width, bmp.height);
+      bmp.close();
+      return imgData;
+    },
+    input: async (cmd) => {
+      await api("/api/screen/input", { serial, ...cmd });
+    },
+    analyze: analyzeScreen,
+    candidate: (image, boxes) => specificTarget || chooseCandidate(image, boxes || currentScreenBoxes),
+    report: (step, msg) => {
+      appendSpinLog(step, msg);
+    },
+  });
+
+  try {
+    await activeSpinWorkflow.run(specificTarget);
+    await captureAndDetectScreen();
+  } catch (e) {
+    appendSpinLog("error", `Spin workflow error: ${e.message}`);
+  } finally {
+    activeSpinWorkflow = null;
+    if (isLiveEnabled() && !$("#screen-overlay").hidden) {
+      screenLiveTimer = setTimeout(captureAndDetectScreen, 2000);
+    }
+  }
+}
+
+// Screen Studio Event Listeners
+$("#screen-device-refresh")?.addEventListener("click", refreshScreenDevices);
+$("#screen-threshold")?.addEventListener("input", (e) => {
+  $("#screen-thresh-val").textContent = `${e.target.value}%`;
+  if (currentScreenBoxes.length) renderScreenCanvas(currentScreenBoxes);
+});
+$("#screen-show-all-chk")?.addEventListener("change", () => {
+  if (currentScreenBoxes.length) renderScreenCanvas(currentScreenBoxes);
+});
+$("#screen-engine-select")?.addEventListener("change", () => captureAndDetectScreen());
+$("#screen-open-overlay-btn")?.addEventListener("click", () => {
+  $("#screen-overlay").hidden = false;
+  captureAndDetectScreen();
+});
+$("#screen-overlay-close")?.addEventListener("click", () => {
+  $("#screen-overlay").hidden = true;
+  clearTimeout(screenLiveTimer);
+});
+$("#screen-overlay-dock")?.addEventListener("click", () => {
+  const overlay = $("#screen-overlay");
+  const isExpanded = overlay.classList.toggle("expanded");
+  const dockBtn = $("#screen-overlay-dock");
+  if (dockBtn) {
+    dockBtn.textContent = isExpanded ? "⤡" : "⤢";
+    dockBtn.title = isExpanded ? "ย่อหน้าจอลง (Normal View)" : "ขยายหน้าจอใหญ่ (Large HD View)";
+  }
+});
+$("#screen-capture-once")?.addEventListener("click", captureAndDetectScreen);
+$("#screen-clear-log-btn")?.addEventListener("click", () => {
+  const el = $("#screen-spin-log");
+  if (el) el.textContent = "พร้อมบันทึกการทำงาน…";
+});
+
+$("#screen-live-chk")?.addEventListener("change", (e) => {
+  syncLiveToggles(e.target.checked);
+  if (e.target.checked) captureAndDetectScreen();
+  else clearTimeout(screenLiveTimer);
+});
+$("#screen-live-toggle")?.addEventListener("change", (e) => {
+  syncLiveToggles(e.target.checked);
+  if (e.target.checked) captureAndDetectScreen();
+  else clearTimeout(screenLiveTimer);
+});
+
+$("#screen-auto-spin-chk")?.addEventListener("change", (e) => {
+  syncAutoSpinToggles(e.target.checked);
+  toast(e.target.checked ? "⚡ เปิดโหมดหมุนเสาอัตโนมัติ (Auto-Spin)" : "ปิดโหมดหมุนเสาอัตโนมัติ");
+});
+$("#screen-auto-spin-toggle")?.addEventListener("change", (e) => {
+  syncAutoSpinToggles(e.target.checked);
+  toast(e.target.checked ? "⚡ เปิดโหมดหมุนเสาอัตโนมัติ (Auto-Spin)" : "ปิดโหมดหมุนเสาอัตโนมัติ");
+});
+
+function handleAutoCatchToggle(checked) {
+  syncAutoCatchToggles(checked);
+  if (checked) {
+    toast("🎯 เปิดระบบ Auto-Catch (ตรวจจับ Encounter และโยน Pokéball อัตโนมัติ)");
+    throwLog("⚡ เปิดโหมด Auto-Catch: พร้อมตรวจจับหน้าจอและโยนอัตโนมัติ");
+    if (!screenBusy && !activeCatchWorkflow && !activeSpinWorkflow?.running) {
+      captureAndDetectScreen();
+    }
+  } else {
+    toast("ปิดระบบ Auto-Catch");
+    throwLog("⏹ ปิดโหมด Auto-Catch");
+  }
+}
+
+$("#screen-auto-catch-chk")?.addEventListener("change", (e) => handleAutoCatchToggle(e.target.checked));
+$("#screen-auto-catch-toggle")?.addEventListener("change", (e) => handleAutoCatchToggle(e.target.checked));
+$("#throw-auto-catch-chk")?.addEventListener("change", (e) => handleAutoCatchToggle(e.target.checked));
+
+$("#quick-spin-btn")?.addEventListener("click", () => runQuickSpinWorkflow());
+$("#screen-spin-workflow-btn")?.addEventListener("click", () => runQuickSpinWorkflow());
+
+/* =========================================================================
+   Pokéball Throw (Catch Pokémon)
+   ========================================================================= */
+
+// Strength slider display
+$("#throw-strength")?.addEventListener("input", (e) => {
+  $("#throw-strength-val").textContent = e.target.value;
+});
+
+function throwLog(msg) {
+  const el = $("#throw-log");
+  if (!el) return;
+  const now = new Date().toLocaleTimeString("th-TH");
+  if (el.innerHTML.includes("⚡ พร้อมโยน Pokéball...")) {
+    el.innerHTML = "";
+  }
+  let color = "#f1f2f6";
+  if (msg.includes("✅") || msg.includes("🎉")) color = "#2ecc71";
+  else if (msg.includes("⚠️") || msg.includes("⏳")) color = "#f1c40f";
+  else if (msg.includes("🔴")) color = "#ff7675";
+  else if (msg.includes("❌")) color = "#ff4757";
+  else if (msg.includes("🎯") || msg.includes("⚡")) color = "#70a1ff";
+
+  el.innerHTML += `<div style="margin-bottom:2px; color:${color};">[${now}] ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+// Detect encounter
+$("#detect-encounter-btn")?.addEventListener("click", safe(async () => {
+  const serial = $("#screen-device-select")?.value;
+  if (!serial) { toast("เลือกอุปกรณ์ก่อน"); return; }
+  const status = $("#encounter-status");
+  status.innerHTML = "🔍 กำลังตรวจจับ...";
+  try {
+    const res = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+    if (res.is_encounter) {
+      status.innerHTML = `✅ <strong>พบหน้าจอ Encounter!</strong> พร้อมโยน Pokéball`;
+      status.style.color = "#2ecc71";
+      throwLog("✅ ตรวจพบหน้าจอ Encounter (พร้อมโยน)");
+    } else {
+      status.innerHTML = `❌ ไม่ใช่หน้าจอ Encounter (ball:${res.has_pokeball}, cp:${res.has_cp_text})`;
+      status.style.color = "#e74c3c";
+      throwLog(`❌ ไม่ใช่หน้าจอ Encounter`);
+    }
+  } catch (err) {
+    status.innerHTML = `⚠️ Error: ${err.message || err}`;
+    status.style.color = "#e67e22";
+  }
+}));
+
+// Throw mode toggle display
+$("#throw-curveball")?.addEventListener("change", (e) => {
+  const lbl = $("#throw-mode-label");
+  if (lbl) {
+    lbl.textContent = e.target.checked ? "🌀 Curveball (หมุนลูก)" : "⬆️ Straight (โยนตรง)";
+  }
+});
+
+// Single throw
+$("#throw-ball-btn")?.addEventListener("click", safe(async () => {
+  const serial = $("#screen-device-select")?.value;
+  if (!serial) { toast("เลือกอุปกรณ์ก่อน"); return; }
+  const strength = Number($("#throw-strength").value) / 100;
+  const curveball = $("#throw-curveball") ? $("#throw-curveball").checked : true;
+  const modeText = curveball ? "Curveball" : "Straight";
+  $("#throw-ball-btn").disabled = true;
+  throwLog(`🔴 โยน ${modeText} ความแรง ${Math.round(strength * 100)}%...`);
+  try {
+    const res = await api("/api/screen/throw_ball", { serial, strength, curveball });
+    throwLog(`✅ โยนสำเร็จ (${res.action})`);
+    toast(`🔴 โยน Pokéball (${res.action}) แล้ว!`);
+  } catch (err) {
+    const detail = err.message || err;
+    throwLog(`❌ ${detail}`);
+    toast(`โยนไม่ได้: ${detail}`);
+  } finally {
+    $("#throw-ball-btn").disabled = false;
+  }
+}));
+
+// Auto-throw loop
+let autoThrowRunning = false;
+
+$("#throw-ball-auto-btn")?.addEventListener("click", safe(async () => {
+  const serial = $("#screen-device-select")?.value;
+  if (!serial) { toast("เลือกอุปกรณ์ก่อน"); return; }
+
+  if (autoThrowRunning) {
+    autoThrowRunning = false;
+    $("#throw-ball-auto-btn").textContent = "🔄 โยนจนจับได้";
+    $("#throw-ball-auto-btn").style.background = "#e67e22";
+    throwLog("⏹ หยุดโยนอัตโนมัติ");
+    return;
+  }
+
+  autoThrowRunning = true;
+  $("#throw-ball-auto-btn").textContent = "⏹ หยุดโยน";
+  $("#throw-ball-auto-btn").style.background = "#c0392b";
+  const strength = Number($("#throw-strength").value) / 100;
+  const curveball = $("#throw-curveball") ? $("#throw-curveball").checked : true;
+  const modeText = curveball ? "Curveball" : "Straight";
+  let attempts = 0;
+  const maxAttempts = 30;
+
+  throwLog(`🔄 เริ่มโยนอัตโนมัติ (${modeText}, max ${maxAttempts} ครั้ง)...`);
+
+  while (autoThrowRunning && attempts < maxAttempts) {
+    attempts++;
+    try {
+      // 1. Verify on encounter screen before throw
+      const enc = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+      if (!enc.is_encounter) {
+        throwLog(`🎉 ไม่พบหน้า Encounter แล้ว — การจับเสร็จสิ้น!`);
+        toast("🎉 จบ Encounter แล้ว!");
+        break;
+      }
+
+      // 2. Throw ball
+      throwLog(`🔴 โยนครั้งที่ ${attempts} (${modeText} ${Math.round(strength * 100)}%)...`);
+      await api("/api/screen/throw_ball", { serial, strength, curveball });
+
+      // 3. Wait for ball shake / breakout / catch resolution
+      throwLog("⏳ กำลังรอผลการจับ (รอแอนิเมชันสั่นลูกบอล)...");
+
+      let brokeOut = false;
+      // Check every 1.5s up to 10s
+      for (let poll = 0; poll < 6; poll++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (!autoThrowRunning) break;
+        try {
+          const check = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+          if (check.is_encounter) {
+            brokeOut = true;
+            throwLog(`⚠️ Pokémon หลุดออกจากลูกบอล! กำลังเตรียมโยนรอบที่ ${attempts + 1}...`);
+            break;
+          }
+        } catch (_) {}
+      }
+
+      if (!brokeOut) {
+        throwLog(`🎉 จับ Pokémon สำเร็จหรือจบการต่อสู้! (โยน ${attempts} ครั้ง)`);
+        toast("🎉 จบการต่อสู้!");
+        // Dismiss summary overlay if needed
+        try {
+          await api("/api/screen/input", { serial, action: "tap", x: 0.5, y: 0.92 });
+          await new Promise((r) => setTimeout(r, 800));
+          await api("/api/screen/input", { serial, action: "tap", x: 0.5, y: 0.92 });
+        } catch (_) {}
+        break;
+      }
+    } catch (err) {
+      throwLog(`⚠️ ครั้งที่ ${attempts}: ${err.message || err}`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+
+  if (attempts >= maxAttempts) {
+    throwLog(`⏹ หยุดหลังโยนครบ ${maxAttempts} ครั้ง`);
+  }
+
+  autoThrowRunning = false;
+  $("#throw-ball-auto-btn").textContent = "🔄 โยนจนจับได้";
+  $("#throw-ball-auto-btn").style.background = "#e67e22";
+}));
+
+/* =========================================================================
+   AI Trainer Studio (Dataset Collection, Auto-Label, YOLO & ONNX Training)
+   ========================================================================= */
+let trainStatusTimer = null;
+let datasetPollTimer = null;
+
+
+async function refreshDatasetStats() {
+  try {
+    const data = await api("/api/ai/dataset/status");
+    $("#stat-images").textContent = data.total_images ?? data.images ?? 0;
+    $("#stat-labels").textContent = data.total_labels ?? data.labels ?? 0;
+    $("#stat-active").textContent = data.class_counts?.pokestop_active ?? 0;
+    $("#stat-cooldown").textContent = data.class_counts?.pokestop_cooldown ?? 0;
+    $("#stat-gym").textContent = data.class_counts?.gym ?? 0;
+    const pokeStat = $("#stat-pokemon");
+    if (pokeStat) pokeStat.textContent = data.class_counts?.pokemon ?? 0;
+
+    const isCollecting = data.collection?.running || data.is_collecting;
+    if (isCollecting) {
+      $("#ai-collect-progress").hidden = false;
+      const target = data.collection?.total || data.target_count || 1;
+      const current = data.collection?.current || data.collected_count || 0;
+      const pct = Math.min(100, Math.round((current / target) * 100));
+      $("#ai-collect-fill").style.width = `${pct}%`;
+      $("#ai-collect-text").textContent = `${current}/${target} (${pct}%)`;
+      $("#ai-start-collect").disabled = true;
+      $("#ai-stop-collect").disabled = false;
+      clearTimeout(datasetPollTimer);
+      datasetPollTimer = setTimeout(refreshDatasetStats, 1500);
+    } else {
+      $("#ai-collect-progress").hidden = true;
+      $("#ai-start-collect").disabled = false;
+      $("#ai-stop-collect").disabled = true;
+    }
+  } catch (err) {
+    console.warn("Dataset stats error:", err);
+  }
+}
+
+async function refreshModelStatus() {
+  try {
+    const data = await api("/api/ai/model/status");
+    const badge = $("#ai-model-ready-badge");
+    const pathText = $("#ai-model-path-text");
+    const isReady = data.ready || data.is_loaded;
+    if (isReady) {
+      badge.textContent = "Model: Active (ONNX Local)";
+      badge.className = "badge badge-success";
+      pathText.textContent = `${data.model_path} (${data.providers?.join(", ") || "CPU"})`;
+    } else {
+      badge.textContent = "Model: Fallback (Heuristic)";
+      badge.className = "badge badge-warning";
+      pathText.textContent = "ยังไม่มีโมเดล ONNX ที่โหลด — ระบบใช้ Heuristic ตรวจจับอัตโนมัติ";
+    }
+  } catch (err) {
+    console.warn("Model status error:", err);
+  }
+}
+
+async function pollTrainStatus() {
+  clearTimeout(trainStatusTimer);
+  try {
+    const status = await api("/api/ai/train/status");
+    const logBox = $("#ai-train-log");
+    if (logBox && status.logs?.length) {
+      logBox.textContent = status.logs.join("");
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+    const isTraining = Boolean(status.is_training || status.running);
+    if (isTraining) {
+      $("#ai-start-train-btn").disabled = true;
+      $("#ai-stop-train-btn").disabled = false;
+      trainStatusTimer = setTimeout(pollTrainStatus, 1000);
+    } else {
+      $("#ai-start-train-btn").disabled = false;
+      $("#ai-stop-train-btn").disabled = true;
+      const stage = status.stage || status.status;
+      if (stage === "completed") {
+        toast("🚀 เทรนโมเดล YOLOv8 สำเร็จและแปลงเป็น ONNX เรียบร้อย!");
+        await refreshModelStatus();
+      } else if (stage === "error" || stage === "failed") {
+        toast(`การเทรนล้มเหลว: ${status.error || "Unknown error"}`);
+      } else if (stage === "stopped") {
+        toast("การเทรนถูกยกเลิกแล้ว");
+      }
+    }
+  } catch (err) {
+    console.warn("Train poll error:", err);
+  }
+}
+
+$("#ai-start-collect")?.addEventListener("click", safe(async () => {
+  const serial = $("#screen-device-select")?.value;
+  const count = Number($("#ai-collect-count").value) || 30;
+  const interval = Number($("#ai-collect-interval").value) || 2.0;
+  await api("/api/ai/dataset/collect", { serial, count, interval });
+  toast(`เริ่มเก็บภาพหน้าจอ ${count} ภาพทุก ๆ ${interval} วิ…`);
+  refreshDatasetStats();
+}));
+
+$("#ai-stop-collect")?.addEventListener("click", safe(async () => {
+  await api("/api/ai/dataset/stop-collect", {});
+  toast("หยุดการเก็บภาพหน้าจอแล้ว");
+  refreshDatasetStats();
+}));
+
+$("#ai-auto-label-btn")?.addEventListener("click", safe(async () => {
+  $("#ai-auto-label-btn").disabled = true;
+  try {
+    toast("กำลังวาด Bounding Boxes ให้ชุดข้อมูลทั้งหมด…");
+    const res = await api("/api/ai/dataset/auto-label", { confidence: 0.8 });
+    toast(`🏷 Auto-Label สำเร็จ ${res.labeled_count} ภาพ (${res.total_boxes} boxes)`);
+    await refreshDatasetStats();
+  } finally {
+    $("#ai-auto-label-btn").disabled = false;
+  }
+}));
+
+$("#ai-start-train-btn")?.addEventListener("click", safe(async () => {
+  const epochs = Number($("#ai-train-epochs").value) || 30;
+  const imgsz = Number($("#ai-train-imgsz").value) || 640;
+  const logBox = $("#ai-train-log");
+  if (logBox) logBox.textContent = "กำลังเตรียมสภาพแวดล้อมและเริ่มเทรนโมเดล YOLOv8 บน Mac…\n";
+  await api("/api/ai/train/start", { epochs, imgsz });
+  toast(`🚀 เริ่มเทรน YOLOv8 (${epochs} epochs, ${imgsz}px) แล้ว…`);
+  pollTrainStatus();
+}));
+
+$("#ai-stop-train-btn")?.addEventListener("click", safe(async () => {
+  await api("/api/ai/train/stop", {});
+  toast("ส่งคำสั่งหยุดการเทรนแล้ว");
+  pollTrainStatus();
+}));
+
+$("#ai-reload-model-btn")?.addEventListener("click", safe(async () => {
+  await refreshModelStatus();
+  toast("อัปเดตสถานะโมเดลแล้ว");
+}));

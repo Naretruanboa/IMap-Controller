@@ -1,9 +1,19 @@
+[project]
+name = "iphone-gps-web-controller"
+version = "2.5.0"
+description = "iPhone GPS Web Controller with AI Vision, PokéStop Auto-Spin & Native Auto-Catch Engine"
+authors = [{ name = "Naret" }]
+readme = "README.md"
+requires-python = ">=3.11"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["."]
+
 [tool.ruff]
 line-length = 110
+
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E501"]

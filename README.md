@@ -1,6 +1,10 @@
-# iPhone GPS Web Controller
+# iPhone GPS Web Controller `v2.5.0`
 
-เครื่องมือ Developer Location Simulation สำหรับทดสอบแอป iOS จาก macOS ผ่าน USB มี FastAPI backend และ Web UI ชื่อ Location Studio ใช้ Leaflet/OpenStreetMap รองรับ Mock Mode โดยไม่ต้องมี iPhone
+[![Version](https://img.shields.io/badge/version-v2.5.0-00e5ff.svg)](pyproject.toml)
+[![AI Vision](https://img.shields.io/badge/AI_Vision-YOLOv8_ONNX-00b894.svg)](models/)
+[![Touch Engine](https://img.shields.io/badge/Touch_Engine-Native_Go_Zero--Fork-6c5ce7.svg)](scripts/touch_injector/)
+
+เครื่องมือ Developer Location Simulation & AI Vision Studio สำหรับทดสอบแอป iOS/Android ผ่าน USB และ ADB มี FastAPI backend, Web UI (Location Studio), YOLOv8 Object Detection, Auto-Catch & Native Zero-Fork Curveball Throw Engine รองรับ Mock Mode โดยไม่ต้องมีเครื่องจริง
 
 รองรับ Android ผ่าน ADB Developer Mock Location ด้วย โดยใช้ test provider มาตรฐานของระบบและคืน provider/สิทธิ์เดิมเมื่อ disconnect ไม่มีระบบหลบการตรวจจับ mock location
 
@@ -210,11 +214,12 @@ Browser (Leaflet + ES modules)
 | services/movement_engine.py | geodesic distance, bearing, destination, R=6,371,000 m |
 | services/route_engine.py | segment progression, loops, pause/resume state |
 | services/gpx_parser.py | XML/GPX validation โดย defusedxml |
-| database/database.py | SQLite parameterized statements |
-| static/index.html, css/app.css | responsive desktop-first UI |
-| static/js/ | app, map, joystick, route, WebSocket modules |
+| services/ai_detector.py | Offline YOLOv8 + ONNX detector สำหรับตรวจจับ PokéStops, Gyms และโปเกมอนป่า |
+| services/training_service.py | บริการเก็บภาพหน้าจอ Dataset, Auto-Labeling และ Train โมเดล YOLOv8 ออฟไลน์ |
+| static/index.html, css/app.css | responsive desktop-first UI พร้อม Live Screen Overlay และ AI Trainer Studio |
+| static/js/ | app, map, joystick, route, WebSocket, screen detection modules |
 | static/vendor/ | Leaflet 1.9.4 และ license |
-| tests/ | unit, API, WebSocket และ recovery tests |
+| tests/ | unit, API, AI detector, WebSocket และ recovery tests |
 
 เลือกได้หลาย iPhone แต่ควบคุม **หนึ่งเครื่องในเวลาเดียวกัน** การเปลี่ยนเครื่องจะ clear เครื่องเดิมก่อน State/session สร้างต่อ app instance ไม่มี mutable singleton ของ device ใน module
 
@@ -309,3 +314,61 @@ movement speed (including an active automatic speed schedule). Selecting another
 the destination; press **Run here** to redirect movement from the latest position without teleporting.
 Pause, Resume and Stop control the movement; it stops on arrival. Coordinate search and dragging
 the destination also preview a point and require pressing **Run here** to move there.
+
+### Screen Detection, AI YOLOv8n Studio & Auto-Spin Workflow
+
+ระบบมีโมดูล **Screen Studio** สำหรับตรวจจับเสา PokéStop และหมุนเสาอัตโนมัติผ่านภาพหน้าจอของอุปกรณ์ Android (ADB) รองรับทั้งโหมดออฟไลน์และโมเดล AI:
+
+```text
+Android Device (ADB) ──(Capture Screen)──► FastAPI Backend
+                                                │
+       ┌────────────────────────────────────────┴────────────────────────────────────────┐
+       ▼                                                                                  ▼
+[AI Model Mode (ONNX)]                                                         [Heuristic Mode]
+YOLOv8n Object Detector (`pokestop_yolov8n.onnx`)                              Color Segmentation + 3D Disc Topology
++ Pixel-Level Color Calibration                                               - Cyan Rings (Active) vs Purple (Cooldown)
+- `pokestop_active` (สีฟ้า, eligible: true)                                    - Geometric Ellipse & Glow Analysis
+- `pokestop_cooldown` (สีม่วงติดคูลดาวน์, eligible: false)                      - Aspect ratio & fill thresholds
+       │                                                                                  │
+       └────────────────────────────────────────┬─────────────────────────────────────────┘
+                                                ▼
+                                    [Frontend Studio & Overlay]
+                          - Floating Live Screen Overlay บนแผนที่
+                          - สวิตช์ Live Detection (ON / OFF)
+                          - สวิตช์ Auto-Spin (ON / OFF)
+                          - แสดง Bounding Boxes & ระดับความมั่นใจ (%)
+                          - รายการการ์ดเสาพร้อมปุ่มคลิกหมุนทันที
+                          - บันทึกการทำงานลงช่อง Terminal Logs (ไม่รบกวนด้วย Toast)
+                                                │
+                                                ▼
+                                    [Touch Input / Spin Action]
+                        1. แตะเสาสีฟ้าบนแผนที่ (Tap Stop)
+                        2. ตรวจสอบหน้ารายละเอียด Photo Disc
+                        3. ปาดหมุนเหรียญ (Horizontal Swipe)
+                        4. ยืนยันเหรียญเปลี่ยนเป็นสีม่วง (Verify Cooldown)
+                        5. แตะปุ่มปิด (X) / Back กลับสู่หน้าแผนที่
+```
+
+#### 1. คุณสมบัติของ AI Model (YOLOv8n + ONNX Runtime)
+- **Offline 100%**: รันผ่าน `onnxruntime` บน CPU ในเครื่อง ไม่ต้องต่อเน็ต และไม่ส่งภาพออกภายนอก
+- **โมเดลขนาดกะทัดรัด**: `models/pokestop_yolov8n.onnx` ขนาดเพียง ~11.7 MB
+- **แยกแยะสถานะเสาอย่างแม่นยำ**:
+  - `pokestop_active`: เสาสีฟ้าในระยะหมุน พร้อมส่งคำสั่งหมุนทันที (`eligible: true`, กรอบสีเขียว)
+  - `pokestop_cooldown`: เสาสีม่วงที่หมุนไปแล้วหรือติดคูลดาวน์ จะถูกแยกออกอย่างแม่นยำและข้ามการหมุนอัตโนมัติ (`eligible: false`, กรอบสีม่วง)
+  - `pokestop_distant`, `gym`: เสาระยะไกลและยิม
+
+#### 2. AI Training & Dataset Pipeline (สร้างและเทรนโมเดลในตัว)
+- **Step 1: Dataset Collection**: ดึงภาพหน้าจอจากอุปกรณ์ Android อัตโนมัติทุกๆ 0.5–10 วินาที
+- **Step 2: Auto-Labeling**: สร้าง Bounding Boxes และระบุคลาสแบบ YOLO อัตโนมัติ
+- **Step 3: YOLO Training**: เทรนโมเดล YOLOv8 บนเครื่องและแปลงเป็นไฟล์ ONNX อัตโนมัติ
+- **Git Storage Policy**: โฟลเดอร์รูปภาพดิบ `dataset/images/` และ `dataset/labels/` ถูก ignore ไว้ใน `.gitignore` เพื่อไม่ให้ Repo บวม โดยจัดเก็บเฉพาะไฟล์โมเดลสำเร็จรูป `models/pokestop_yolov8n.onnx` และ `dataset/data.yaml`
+
+#### 3. การควบคุมและแสดงผล Logs (Terminal Logs)
+- **สวิตช์ Live Detection (ON / OFF)**: เปิด/ปิดการตรวจจับแบบสด ช่วยประหยัด CPU เมื่อไม่ได้ใช้งาน พร้อมปุ่ม **"📸 ถ่ายภาพครั้งเดียว"** สำหรับสแกนเฉพาะเวลาที่ต้องการ
+- **สวิตช์ Auto-Spin (ON / OFF)**: หมุนเสาสีฟ้าอัตโนมัติเมื่อเดินเข้าไปในระยะ (มีคูลดาวน์ 5 วินาทีป้องกันการกดซ้ำ)
+- **กล่องบันทึก Logs (Terminal Logs)**: รายงานขั้นตอนการหมุนเสาทั้งหมด (`[DETECT]`, `[TAP]`, `[SWIPE]`, `[VERIFY]`, `[DONE]`) ลงในกล่อง **SPIN & DETECTION LOGS** ในแถบด้านข้าง และแสดงสถานะย่อบนหน้าต่าง Live Overlay โดยไม่มี Popup Toast มารบกวนสายตา
+
+#### 4. บันทึกพิกัดตำแหน่งล่าสุดอัตโนมัติ (Location Persistence)
+- ตำแหน่งพิกัด (ละติจูด, ลองจิจูด), ระดับการ Zoom, จุดกึ่งกลางแผนที่ และจุดหมายปลายทาง จะถูกบันทึกเก็บไว้ใน SQLite (`app_settings`) และ `localStorage` ของเบราว์เซอร์อัตโนมัติ
+- เมื่อกด **Refresh หน้าเว็บ** หรือสั่ง **Stop/Start เซิร์ฟเวอร์ใหม่** หน้าเว็บจะโหลดกลับมาที่ตำแหน่งเดิมทันทีโดยไม่ต้องคอยปักหมุดใหม่
+

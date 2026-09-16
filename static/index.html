@@ -20,7 +20,7 @@
         ‹
       </button>
       <a class="brand" href="/"
-        >⌖ <span>Location Studio<small>iPHONE GPS CONTROLLER</small></span></a
+        >⌖ <span>Location Studio<small>iPHONE GPS CONTROLLER <span style="display:inline-block;margin-left:4px;padding:1px 5px;background:rgba(0,229,255,0.18);color:#00e5ff;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.5px;border:1px solid rgba(0,229,255,0.35);">v2.5.0</span></small></span></a
       >
       <div class="workspace-label">
         WORKSPACE <span id="provider">LOCAL</span>
@@ -36,6 +36,10 @@
           ♧ <span>Multi Spot</span><kbd>04</kbd></button
         ><button data-mode="random">
           ⚄ <span>Random Walk</span><kbd>05</kbd></button
+        ><button data-mode="screen">
+          ▧ <span>Screen Studio</span><kbd>06</kbd></button
+        ><button data-mode="ai-trainer">
+          ⚡ <span>AI Trainer</span><kbd>07</kbd></button
         ><button data-mode="gpx">⇧ <span>Import GPX</span></button
         ><button data-mode="favorites">☆ <span>Favorites</span></button
         ><button data-mode="history">◷ <span>History</span></button
@@ -93,6 +97,31 @@
         <div class="map-tag">
           ◎ <span id="simulation-label">Simulation inactive</span>
         </div>
+        
+        <!-- Live Screen Overlay (Floatable on top of map) -->
+        <section id="screen-overlay" class="screen-overlay" hidden>
+          <div class="screen-overlay-header">
+            <span class="screen-title">▧ Live Screen & PokéStop Detection</span>
+            <div class="screen-header-actions">
+              <span id="screen-overlay-badge" class="badge">0 เสา</span>
+              <button id="screen-overlay-dock" type="button" title="สลับขนาดหน้าจอ (ย่อ/ขยาย)">⤢</button>
+              <button id="screen-overlay-close" type="button" title="ปิดหน้าจอ">✕</button>
+            </div>
+          </div>
+          <div class="screen-canvas-container">
+            <canvas id="live-screen-canvas" aria-label="Live game screen with bounding boxes"></canvas>
+            <div id="screen-empty-placeholder" class="screen-empty">กำลังรอภาพหน้าจอ…</div>
+          </div>
+          <div class="screen-overlay-log" id="screen-overlay-log">⚡ พร้อมหมุนเสา…</div>
+          <div class="screen-overlay-footer">
+            <button id="quick-spin-btn" class="primary" type="button" title="แตะและหมุนเสาใกล้สุด 1 เสา">⚡ หมุนเสาใกล้สุด</button>
+            <button id="screen-capture-once" class="quiet" type="button" title="จับภาพหน้าจอใหม่ทันที">↻ จับภาพ</button>
+            <label class="checkbox-label"><input id="screen-live-chk" type="checkbox" checked /><span>Live</span></label>
+            <label class="checkbox-label"><input id="screen-auto-spin-chk" type="checkbox" /><span>Auto-Spin</span></label>
+            <label class="checkbox-label"><input id="screen-auto-catch-chk" type="checkbox" /><span>Auto-Catch</span></label>
+          </div>
+        </section>
+
         <section id="panel" class="floating-panel">
           <button
             id="panel-toggle"
@@ -113,7 +142,7 @@
           <div id="destination-display" class="coordinate-preview">
             No destination selected
           </div>
-          <div class="row">
+          <div class="row" id="teleport-actions">
             <button id="teleport" data-control class="primary">
               Teleport here ↗</button
             ><button
@@ -124,6 +153,162 @@
               ☆
             </button>
           </div>
+          
+          <!-- Screen Studio Controls -->
+          <div id="screen-controls" hidden>
+            <div class="field-group">
+              <label class="eyebrow">ANDROID DEVICE FOR SCREEN</label>
+              <div class="row">
+                <select id="screen-device-select"></select>
+                <button id="screen-device-refresh" class="quiet" type="button">↻</button>
+              </div>
+            </div>
+            <div class="field-group">
+              <label class="eyebrow">DETECTION ENGINE</label>
+              <select id="screen-engine-select">
+                <option value="ai" selected>AI Model (ONNX Runtime)</option>
+                <option value="heuristic">Heuristic (สีและรูปทรง 3D)</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label class="eyebrow">MINIMUM SCORE THRESHOLD: <span id="screen-thresh-val">40%</span></label>
+              <input id="screen-threshold" type="range" min="20" max="95" value="40" />
+            </div>
+            <div class="field-group">
+              <label class="checkbox-label">
+                <input id="screen-show-all-chk" type="checkbox" />
+                <span>แสดงจุดที่ไม่ผ่านเกณฑ์ด้วย (Rejected Boxes)</span>
+              </label>
+            </div>
+            <div class="field-group" style="margin-top:8px">
+              <label class="checkbox-label">
+                <input id="screen-live-toggle" type="checkbox" checked />
+                <span>● ตรวจจับสดอัตโนมัติ (Live Detection ทุก 3 วิ)</span>
+              </label>
+            </div>
+            <div class="field-group" style="margin-top:6px">
+              <label class="checkbox-label">
+                <input id="screen-auto-spin-toggle" type="checkbox" />
+                <span>⚡ หมุนเสาอัตโนมัติ (Auto-Spin เมื่อพบเสาพร้อมหมุน)</span>
+              </label>
+            </div>
+            <div class="field-group" style="margin-top:6px">
+              <label class="checkbox-label">
+                <input id="screen-auto-catch-toggle" type="checkbox" />
+                <span>🎯 ตรวจจับ Encounter & โยนจับอัตโนมัติ (Auto-Catch)</span>
+              </label>
+            </div>
+            <div class="row" style="margin-top:12px">
+              <button id="screen-open-overlay-btn" class="primary" type="button">🖥 แสดงหน้าจอตรวจจับ</button>
+              <button id="screen-spin-workflow-btn" class="primary" type="button">⚡ หมุนเสาใกล้สุด 1 เสา</button>
+            </div>
+
+            <!-- Pokéball Throw Controls -->
+            <div class="field-group" style="margin-top:14px; padding:12px; background:var(--surface-2, #1a1a2e); border-radius:12px; border:1px solid var(--border, #333);">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <div class="eyebrow" style="color:#ff6b6b; margin:0;">🔴 POKÉBALL THROW</div>
+                <label class="checkbox-label" style="margin:0; font-size:12px; cursor:pointer;">
+                  <input id="throw-auto-catch-chk" type="checkbox" />
+                  <span style="color:#2ecc71; font-weight:600;">⚡ Auto-Catch</span>
+                </label>
+              </div>
+              <p class="hint">ตรวจจับหน้าจอ Encounter แล้วโยน Pokéball จับ Pokémon อัตโนมัติ</p>
+              <div id="encounter-status" class="hint" style="margin:6px 0; padding:6px 10px; border-radius:8px; background:rgba(255,255,255,0.05);">
+                ⏳ ยังไม่ได้ตรวจจับหน้าจอ Encounter
+              </div>
+              <div class="row" style="gap:10px; margin-top:8px; align-items:center;">
+                <div style="flex:1">
+                  <label class="eyebrow">ความแรง</label>
+                  <input id="throw-strength" type="range" min="10" max="100" value="50" style="width:100%" />
+                  <div class="hint" style="text-align:center"><span id="throw-strength-val">50</span>%</div>
+                </div>
+                <div style="flex:0 0 auto; display:flex; flex-direction:column; justify-content:center;">
+                  <label class="eyebrow">โหมดการโยน</label>
+                  <label class="checkbox-label" style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:2px;">
+                    <input id="throw-curveball" type="checkbox" checked />
+                    <span id="throw-mode-label">🌀 Curveball (หมุนลูก)</span>
+                  </label>
+                </div>
+              </div>
+              <div class="row" style="margin-top:8px; gap:8px;">
+                <button id="detect-encounter-btn" class="quiet" type="button">🔍 ตรวจจับ Encounter</button>
+                <button id="throw-ball-btn" class="primary" type="button" style="background:#e74c3c;">🔴 โยน Pokéball!</button>
+                <button id="throw-ball-auto-btn" class="primary" type="button" style="background:#e67e22;">🔄 โยนจนจับได้</button>
+              </div>
+              <div id="throw-log" style="margin-top:8px; max-height:100px; min-height:55px; overflow-y:auto; font-size:11px; line-height:1.45; background:#0b0d19; color:#f1f2f6; padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.18); font-family:monospace; box-shadow:inset 0 1px 3px rgba(0,0,0,0.5);">
+                <span style="color:#8892b0;">⚡ พร้อมโยน Pokéball...</span>
+              </div>
+            </div>
+
+            <p id="screen-status-text" class="hint">พร้อมตรวจจับภาพหน้าจอ</p>
+            <div id="screen-detected-list" class="detected-stops-list"></div>
+            
+            <div class="field-group" style="margin-top:10px">
+              <div class="eyebrow" style="display:flex;justify-content:space-between;align-items:center;">
+                <span>SPIN & DETECTION LOGS</span>
+                <button id="screen-clear-log-btn" class="quiet" style="padding:2px 6px;font-size:10px;height:auto;" type="button">ล้าง Log</button>
+              </div>
+              <div class="terminal-log" id="screen-spin-log" style="max-height:140px;">พร้อมบันทึกการทำงาน…</div>
+            </div>
+          </div>
+
+          <!-- AI Trainer Studio Controls -->
+          <div id="ai-trainer-controls" hidden>
+            <div class="ai-card">
+              <div class="eyebrow">STEP 1: DATASET COLLECTION (เก็บภาพ)</div>
+              <p class="hint">จับภาพหน้าจอจากอุปกรณ์ Android อัตโนมัติเพื่อนำมาสร้างชุดข้อมูลฝึกสอน</p>
+              <div class="row">
+                <div style="flex:1"><label class="eyebrow">จำนวนภาพ</label><input id="ai-collect-count" type="number" min="1" max="200" value="30" /></div>
+                <div style="flex:1"><label class="eyebrow">ช่วงเวลา (วิ)</label><input id="ai-collect-interval" type="number" min="0.5" max="10" step="0.5" value="2.0" /></div>
+              </div>
+              <div class="row" style="margin-top:8px">
+                <button id="ai-start-collect" class="primary" type="button">▶ เริ่มจับภาพตัวอย่าง</button>
+                <button id="ai-stop-collect" class="quiet" type="button" disabled>⏹ หยุด</button>
+              </div>
+              <div id="ai-collect-progress" class="progress-bar-container" hidden>
+                <div class="progress-bar-fill" id="ai-collect-fill"></div>
+                <span id="ai-collect-text">0/30</span>
+              </div>
+            </div>
+
+            <div class="ai-card" style="margin-top:12px">
+              <div class="eyebrow">STEP 2: AUTO-LABELING (วาดกรอบกำกับคลาส)</div>
+              <p class="hint">สร้างกรอบร่างด้วยสี/รูปทรงสำหรับเสา ต้องตรวจแก้ label เอง โดยเฉพาะ Gym ซึ่ง Auto-Label ยังแยกไม่ได้</p>
+              <div class="ai-stats-grid" id="ai-dataset-stats">
+                <div><span>ภาพทั้งหมด</span><strong id="stat-images">0</strong></div>
+                <div><span>Label แล้ว</span><strong id="stat-labels">0</strong></div>
+                <div><span>เสาฟ้าพร้อมหมุน</span><strong id="stat-active">0</strong></div>
+                <div><span>เสาติดคูลดาวน์</span><strong id="stat-cooldown">0</strong></div>
+                <div><span>Gym</span><strong id="stat-gym">0</strong></div>
+                <div><span>Pokémon</span><strong id="stat-pokemon">0</strong></div>
+              </div>
+              <button id="ai-auto-label-btn" class="primary wide" style="margin-top:8px" type="button">🏷 Auto-Label เฉพาะภาพที่ยังไม่มี Label</button>
+            </div>
+
+            <div class="ai-card" style="margin-top:12px">
+              <div class="eyebrow">STEP 3: YOLO TRAINING & ONNX EXPORT</div>
+              <p class="hint">เทรนโมเดล YOLOv8n และส่งออกเป็นไฟล์ ONNX ใช้งานออฟไลน์</p>
+              <div class="row">
+                <div style="flex:1"><label class="eyebrow">Epochs</label><select id="ai-train-epochs"><option value="10">10 Epochs (เร็ว)</option><option value="30" selected>30 Epochs (แนะนำ)</option><option value="50">50 Epochs (ละเอียด)</option><option value="100">100 Epochs</option></select></div>
+                <div style="flex:1"><label class="eyebrow">Image Size</label><select id="ai-train-imgsz"><option value="640" selected>640 px</option><option value="480">480 px</option></select></div>
+              </div>
+              <div class="row" style="margin-top:8px">
+                <button id="ai-start-train-btn" class="primary" type="button">🚀 เริ่มเทรนโมเดล</button>
+                <button id="ai-stop-train-btn" class="quiet" type="button" disabled>⏹ หยุด</button>
+              </div>
+              <div class="terminal-log" id="ai-train-log">รอเริ่มการเทรน…</div>
+            </div>
+
+            <div class="ai-card" style="margin-top:12px">
+              <div class="eyebrow">ACTIVE MODEL STATUS</div>
+              <div class="row">
+                <span id="ai-model-ready-badge" class="badge">Model: Checking…</span>
+                <button id="ai-reload-model-btn" class="quiet" type="button">↻ Reload</button>
+              </div>
+              <p id="ai-model-path-text" class="mono muted" style="font-size:11px;margin-top:4px"></p>
+            </div>
+          </div>
+
           <div id="route-controls" hidden>
             <button id="use-current">Use controlled location as point A</button>
             <p>Choose a destination, then Add destination for each point. Start moves to point A and follows straight segments. Changes apply on the next Start.</p>

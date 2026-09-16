@@ -36,3 +36,12 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# AI Dataset raw images, labels, and YOLO training runs
+dataset/images/
+dataset/labels/
+dataset/labels.cache
+runs/
+*.pt
+dataset/
+

@@ -7,11 +7,36 @@ export class LocationMap {
       toast("Map library unavailable. You can still enter coordinates.");
       return;
     }
+
+    let initialCenter = [13.7563, 100.5018];
+    let initialZoom = 14;
+    try {
+      const savedView = localStorage.getItem("last_map_view");
+      if (savedView) {
+        const parsed = JSON.parse(savedView);
+        if (Number.isFinite(parsed.lat) && Number.isFinite(parsed.lng)) {
+          initialCenter = [parsed.lat, parsed.lng];
+          if (Number.isFinite(parsed.zoom)) initialZoom = parsed.zoom;
+        }
+      }
+    } catch (_) {}
+
     this.map = L.map("map", { zoomControl: false, doubleClickZoom: false }).setView(
-      [13.7563, 100.5018],
-      14,
+      initialCenter,
+      initialZoom,
     );
     L.control.zoom({ position: "topright" }).addTo(this.map);
+
+    this.map.on("moveend zoomend", () => {
+      try {
+        const center = this.map.getCenter();
+        localStorage.setItem(
+          "last_map_view",
+          JSON.stringify({ lat: center.lat, lng: center.lng, zoom: this.map.getZoom() }),
+        );
+      } catch (_) {}
+    });
+
     let warned = false;
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -37,6 +62,9 @@ export class LocationMap {
       latitude: point.latitude,
       longitude: ((((point.longitude + 180) % 360) + 360) % 360) - 180,
     };
+    try {
+      localStorage.setItem("last_destination", JSON.stringify(point));
+    } catch (_) {}
     this.onSelect(point);
     if (!this.map) return;
     if (this.destination) this.destination.remove();
