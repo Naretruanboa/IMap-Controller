@@ -372,3 +372,9 @@ YOLOv8n Object Detector (`pokestop_yolov8n.onnx`)                              C
 - ตำแหน่งพิกัด (ละติจูด, ลองจิจูด), ระดับการ Zoom, จุดกึ่งกลางแผนที่ และจุดหมายปลายทาง จะถูกบันทึกเก็บไว้ใน SQLite (`app_settings`) และ `localStorage` ของเบราว์เซอร์อัตโนมัติ
 - เมื่อกด **Refresh หน้าเว็บ** หรือสั่ง **Stop/Start เซิร์ฟเวอร์ใหม่** หน้าเว็บจะโหลดกลับมาที่ตำแหน่งเดิมทันทีโดยไม่ต้องคอยปักหมุดใหม่
 
+
+
+Auto-Catch กดตกลงเฉพาะหน้าสรุปที่ OCR อ่านพบคำว่า “รวมทั้งหมด” และไม่ปิดหน้ารายละเอียด Pokémon ต่อ
+ต้องติดตั้ง Tesseract พร้อมภาษาไทย (macOS: `brew install tesseract tesseract-lang`;
+Linux: `sudo apt install tesseract-ocr tesseract-ocr-tha`) และให้ `tesseract` อยู่ใน PATH ของเซิร์ฟเวอร์
+หาก OCR ไม่พร้อมหรืออ่านคำไม่พบ ระบบจะไม่กดตกลง

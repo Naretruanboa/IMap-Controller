@@ -1129,11 +1129,20 @@ async function captureAndDetectScreen() {
     const statusMsg = `ตรวจพบเสาพร้อมหมุน ${eligibleStops.length} จุด (${engine === "ai" ? "AI Model" : "Heuristic"})`;
     $("#screen-status-text").textContent = statusMsg;
 
-    // Auto-Catch trigger: check if encounter screen is active
-    if (isAutoCatchEnabled() && !activeCatchWorkflow && !activeSpinWorkflow?.running && Date.now() - lastCatchTimestamp > 3000) {
+    // Auto-Catch starts only on an encounter; other screens never trigger input.
+    // STRICT: Never activate auto-catch on map screen — it conflicts with auto-spin
+    if (isAutoCatchEnabled() && !activeCatchWorkflow && !activeSpinWorkflow?.running && Date.now() - lastCatchTimestamp > 2500) {
       try {
         const enc = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
-        if (enc.is_encounter) {
+
+        // *** MAP SCREEN GUARD — skip auto-catch entirely ***
+        if (enc.is_map_screen) {
+          // Map screen — Auto-Catch must not send any input
+          // (no log spam — this is the normal state)
+        } else if (enc.is_catch_summary) {
+          await dismissCatchResult(serial, true);
+          return;
+        } else if (enc.ready_to_throw) {
           appendSpinLog("auto-catch", "🎯 ตรวจพบหน้าจอ Encounter — กำลังเริ่มโยน Pokéball อัตโนมัติ...");
           setTimeout(() => runAutoCatchWorkflow(serial), 100);
           return;
@@ -1146,7 +1155,9 @@ async function captureAndDetectScreen() {
       const candidate = chooseCandidate(screenFrameBitmap, currentScreenBoxes);
       if (candidate) {
         appendSpinLog("auto-spin", "พบเสาพร้อมหมุนในระยะ — กำลังเริ่มหมุนอัตโนมัติ...");
-        setTimeout(() => runQuickSpinWorkflow(candidate), 100);
+        setTimeout(() => {
+          if (isAutoSpinEnabled() && !activeSpinWorkflow?.running && !activeCatchWorkflow) runQuickSpinWorkflow(candidate);
+        }, 100);
       }
     }
   } catch (err) {
@@ -1161,8 +1172,27 @@ async function captureAndDetectScreen() {
   }
 }
 
+async function dismissCatchResult(serial, automatic = false) {
+  if (!serial || (automatic && !isAutoCatchEnabled())) return;
+  try {
+    const res1 = await api("/api/screen/dismiss_catch_summary", { serial });
+    if (res1.dismissed && res1.action === "ok_btn") {
+      throwLog("👉 กดปุ่ม 'ตกลง' หน้าสรุปแล้ว — กำลังรอปิดหน้ารายละเอียด Pokémon...");
+      await new Promise((r) => setTimeout(r, 1000));
+      const res2 = await api("/api/screen/dismiss_catch_summary", { serial });
+      if (res2.dismissed) {
+        throwLog("👉 กดปุ่ม ✓ ปิดหน้ารายละเอียด Pokémon เรียบร้อย — กลับสู่หน้าแผนที่");
+      }
+    } else if (res1.dismissed && res1.action === "detail_close") {
+      throwLog("👉 กดปุ่ม ✓ ปิดหน้ารายละเอียด Pokémon เรียบร้อย — กลับสู่หน้าแผนที่");
+    }
+  } catch (err) {
+    throwLog("ปิดหน้าผลจับ: " + (err.message || err));
+  }
+}
+
 async function runAutoCatchWorkflow(serial) {
-  if (activeCatchWorkflow || !serial) return;
+  if (activeCatchWorkflow || activeSpinWorkflow?.running || !serial || !isAutoCatchEnabled()) return;
   activeCatchWorkflow = true;
   lastCatchTimestamp = Date.now();
   clearTimeout(screenLiveTimer);
@@ -1182,9 +1212,25 @@ async function runAutoCatchWorkflow(serial) {
   while (isAutoCatchEnabled() && attempts < maxAttempts) {
     attempts++;
     try {
-      // 1. Verify we're on encounter screen before throwing
+      // 1. Verify screen state before throwing
       const enc = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
-      if (!enc.is_encounter) {
+
+      // *** MAP SCREEN SAFETY — abort immediately if on map ***
+      if (enc.is_map_screen) {
+        throwLog("🗺 ตรวจพบหน้าแผนที่ — หยุด Auto-Catch (ป้องกันชนกับหมุนเสา)");
+        appendSpinLog("catch", "🗺 หน้าแผนที่ — หยุด Auto-Catch");
+        if (statusEl) {
+          statusEl.innerHTML = `🗺 หน้าแผนที่ — หยุด Auto-Catch แล้ว`;
+          statusEl.style.color = "#70a1ff";
+        }
+        break;
+      }
+
+      if (enc.is_catch_summary) {
+        await dismissCatchResult(serial, true);
+        break;
+      }
+      if (!enc.ready_to_throw) {
         throwLog(`🎉 ไม่พบหน้า Encounter แล้ว — การจับเสร็จสิ้น!`);
         appendSpinLog("catch", `🎉 การจับเสร็จสิ้น`);
         toast("🎉 จบ Encounter แล้ว!");
@@ -1194,6 +1240,8 @@ async function runAutoCatchWorkflow(serial) {
         }
         break;
       }
+
+      if (!isAutoCatchEnabled()) break;
 
       const strength = Number($("#throw-strength")?.value || 50) / 100;
       const curveball = $("#throw-curveball") ? $("#throw-curveball").checked : true;
@@ -1209,37 +1257,57 @@ async function runAutoCatchWorkflow(serial) {
       throwLog("⏳ กำลังรอผลการจับ (รอแอนิเมชันสั่นลูกบอล)...");
 
       let brokeOut = false;
-      // Check every 1.5s up to 10 seconds
-      for (let poll = 0; poll < 6; poll++) {
-        await new Promise((r) => setTimeout(r, 1500));
+      let caught = false;
+
+      // Check every 1.2s up to 10 seconds
+      for (let poll = 0; poll < 8; poll++) {
+        await new Promise((r) => setTimeout(r, 1200));
         if (!isAutoCatchEnabled()) break;
         try {
           const check = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
-          if (check.is_encounter) {
+          if (check.is_map_screen) {
+            caught = true;
+            throwLog("🎉 กลับสู่หน้าแผนที่แล้ว!");
+            break;
+          }
+          if (check.is_catch_summary) {
+            caught = true;
+            throwLog("🎉 จับ Pokémon สำเร็จ! กำลังกดตกลง...");
+            await dismissCatchResult(serial, true);
+            break;
+          }
+          if (check.is_pokemon_detail) {
+            caught = true;
+            throwLog("🎉 จับได้แล้ว! พบหน้ารายละเอียด — กำลังกดปุ่ม ✓ ปิด...");
+            try {
+              // Tap green ✓ checkmark at bottom-center (y: 0.915)
+              await api("/api/screen/input", { serial, action: "tap", x: 0.50, y: 0.915 });
+              await new Promise((r) => setTimeout(r, 800));
+              // Tap again in case first tap didn't register
+              await api("/api/screen/input", { serial, action: "tap", x: 0.50, y: 0.915 });
+            } catch (_) {}
+            break;
+          }
+          if (poll >= 2 && check.ready_to_throw) {
             brokeOut = true;
             throwLog(`⚠️ Pokémon หลุดออกจากลูกบอล! กำลังเตรียมโยนรอบที่ ${attempts + 1}...`);
             appendSpinLog("catch", `Pokémon หลุดจากลูกบอล — โยนซ้ำ`);
             break;
           }
+
         } catch (_) {}
       }
 
-      if (!brokeOut) {
-        // If after polling window, encounter screen never returned -> Pokémon caught or fled!
-        const finalMsg = `🎉 จับ Pokémon สำเร็จหรือจบการต่อสู้! (โยน ${attempts} ครั้ง)`;
-        throwLog(finalMsg);
-        appendSpinLog("catch", finalMsg);
-        toast("🎉 จบการต่อสู้!");
+      if (caught) {
+        break;
+      }
+
+      if (!brokeOut && !caught) {
+        throwLog("⏹ ไม่ยืนยันหน้า Encounter — หยุด Auto-Catch");
         if (statusEl) {
-          statusEl.innerHTML = `✅ ${finalMsg}`;
-          statusEl.style.color = "#2ecc71";
+          statusEl.textContent = "⏹ หยุด Auto-Catch — รอหน้า Encounter";
+          statusEl.style.color = "#70a1ff";
         }
-        // Tap bottom center twice to dismiss any Gotcha / summary overlay
-        try {
-          await api("/api/screen/input", { serial, action: "tap", x: 0.5, y: 0.92 });
-          await new Promise((r) => setTimeout(r, 800));
-          await api("/api/screen/input", { serial, action: "tap", x: 0.5, y: 0.92 });
-        } catch (_) {}
         break;
       }
     } catch (err) {
@@ -1258,6 +1326,10 @@ async function runAutoCatchWorkflow(serial) {
 }
 
 async function runQuickSpinWorkflow(specificTarget = null) {
+  if (activeCatchWorkflow) {
+    appendSpinLog("stopped", "กำลังจับ Pokémon อยู่ — รอจับเสร็จสิ้นก่อนหมุนเสา");
+    return;
+  }
   const serial = $("#screen-device-select")?.value;
   if (!serial) {
     appendSpinLog("error", "กรุณาเลือกอุปกรณ์ Android ก่อนหมุนเสา");
@@ -1288,6 +1360,9 @@ async function runQuickSpinWorkflow(specificTarget = null) {
       return imgData;
     },
     input: async (cmd) => {
+      if (activeCatchWorkflow) {
+        throw new Error("กำลังจับ Pokémon อยู่");
+      }
       await api("/api/screen/input", { serial, ...cmd });
     },
     analyze: analyzeScreen,
@@ -1420,18 +1495,39 @@ $("#detect-encounter-btn")?.addEventListener("click", safe(async () => {
   try {
     const res = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
     if (res.is_encounter) {
-      status.innerHTML = `✅ <strong>พบหน้าจอ Encounter!</strong> พร้อมโยน Pokéball`;
+      status.innerHTML = `✅ <strong>พบหน้าจอ Encounter!</strong> (${res.ball_type}) พร้อมโยน Pokéball`;
       status.style.color = "#2ecc71";
-      throwLog("✅ ตรวจพบหน้าจอ Encounter (พร้อมโยน)");
+      throwLog(`✅ ตรวจพบหน้าจอ Encounter (${res.ball_type}) พร้อมโยน`);
+    } else if (res.is_catch_summary) {
+      status.innerHTML = `🎉 <strong>พบหน้าจอรับรางวัล XP (ตกลง)</strong> — จับสำเร็จแล้ว`;
+      status.style.color = "#2ecc71";
+      throwLog("🎉 ตรวจพบหน้าจอรับรางวัล XP ('ตกลง') — จับสำเร็จ");
+    } else if (res.is_pokemon_detail) {
+      status.innerHTML = `📋 <strong>พบหน้ารายละเอียด Pokémon</strong>`;
+      status.style.color = "#70a1ff";
+      throwLog("📋 ตรวจพบหน้ารายละเอียด Pokémon");
+    } else if (res.is_map_screen) {
+      status.innerHTML = `🗺 <strong>หน้าจอแผนที่หลัก</strong> (พร้อมค้นหา Pokémon)`;
+      status.style.color = "#70a1ff";
+      throwLog("🗺 หน้าจอแผนที่หลัก");
     } else {
-      status.innerHTML = `❌ ไม่ใช่หน้าจอ Encounter (ball:${res.has_pokeball}, cp:${res.has_cp_text})`;
+      status.innerHTML = `❌ ไม่ใช่หน้าจอ Encounter (run:${res.has_running_man}, sky:${res.has_sky_gradient}, ball:${res.has_pokeball}, cp:${res.has_cp_text})`;
       status.style.color = "#e74c3c";
-      throwLog(`❌ ไม่ใช่หน้าจอ Encounter`);
+      throwLog(`❌ ไม่ใช่หน้าจอ Encounter (white_tl:${res.white_tl_ratio}, sky:${res.sky_blue_ratio}, red:${res.red_ratio})`);
     }
   } catch (err) {
     status.innerHTML = `⚠️ Error: ${err.message || err}`;
     status.style.color = "#e67e22";
   }
+}));
+
+// Manual dismiss button
+$("#dismiss-catch-btn")?.addEventListener("click", safe(async () => {
+  const serial = $("#screen-device-select")?.value;
+  if (!serial) { toast("เลือกอุปกรณ์ก่อน"); return; }
+  throwLog("👉 สั่งกดปุ่ม 'ตกลง' และปิดหน้ารายละเอียด...");
+  await dismissCatchResult(serial);
+  toast("✅ ส่งคำสั่งปิดหน้าต่างเรียบร้อย");
 }));
 
 // Throw mode toggle display
@@ -1495,9 +1591,27 @@ $("#throw-ball-auto-btn")?.addEventListener("click", safe(async () => {
     try {
       // 1. Verify on encounter screen before throw
       const enc = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+
+      // *** MAP SCREEN SAFETY — stop throwing on map ***
+      if (enc.is_map_screen) {
+        throwLog("🗺 ตรวจพบหน้าแผนที่ — หยุดโยนบอล (ป้องกันชนกับหมุนเสา)");
+        break;
+      }
+
+      if (enc.is_catch_summary) {
+        throwLog(`🎉 ตรวจพบหน้าจอรับรางวัล XP (ตกลง) — จับ Pokémon สำเร็จ!`);
+        toast("🎉 จับ Pokémon สำเร็จ!");
+        await dismissCatchResult(serial);
+        break;
+      }
+      if (enc.is_pokemon_detail) {
+        throwLog("🎉 ตรวจพบหน้าข้อมูล Pokémon — หยุดโยนอัตโนมัติ");
+        break;
+      }
       if (!enc.is_encounter) {
         throwLog(`🎉 ไม่พบหน้า Encounter แล้ว — การจับเสร็จสิ้น!`);
         toast("🎉 จบ Encounter แล้ว!");
+        await dismissCatchResult(serial);
         break;
       }
 
@@ -1509,29 +1623,48 @@ $("#throw-ball-auto-btn")?.addEventListener("click", safe(async () => {
       throwLog("⏳ กำลังรอผลการจับ (รอแอนิเมชันสั่นลูกบอล)...");
 
       let brokeOut = false;
-      // Check every 1.5s up to 10s
-      for (let poll = 0; poll < 6; poll++) {
-        await new Promise((r) => setTimeout(r, 1500));
+      let caught = false;
+
+      // Check every 1.2s up to 10s
+      for (let poll = 0; poll < 8; poll++) {
+        await new Promise((r) => setTimeout(r, 1200));
         if (!autoThrowRunning) break;
         try {
           const check = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+          if (check.is_catch_summary) {
+            caught = true;
+            throwLog(`🎉 จับ Pokémon สำเร็จ! (พบหน้ารับรางวัล XP — โยน ${attempts} ครั้ง)`);
+            toast("🎉 จับ Pokémon สำเร็จ!");
+            await dismissCatchResult(serial);
+            break;
+          }
+          if (check.is_pokemon_detail) {
+            caught = true;
+            throwLog("🎉 จับได้แล้ว! พบหน้ารายละเอียด Pokémon — กำลังกดปิด...");
+            await dismissCatchResult(serial);
+            break;
+          }
           if (check.is_encounter) {
             brokeOut = true;
             throwLog(`⚠️ Pokémon หลุดออกจากลูกบอล! กำลังเตรียมโยนรอบที่ ${attempts + 1}...`);
             break;
           }
+          if (check.is_map_screen) {
+            caught = true;
+            throwLog("🎉 จับเสร็จสิ้นและกลับสู่หน้าแผนที่แล้ว!");
+            break;
+          }
         } catch (_) {}
       }
 
-      if (!brokeOut) {
+      if (caught) {
+        break;
+      }
+
+      if (!brokeOut && !caught) {
         throwLog(`🎉 จับ Pokémon สำเร็จหรือจบการต่อสู้! (โยน ${attempts} ครั้ง)`);
         toast("🎉 จบการต่อสู้!");
-        // Dismiss summary overlay if needed
-        try {
-          await api("/api/screen/input", { serial, action: "tap", x: 0.5, y: 0.92 });
-          await new Promise((r) => setTimeout(r, 800));
-          await api("/api/screen/input", { serial, action: "tap", x: 0.5, y: 0.92 });
-        } catch (_) {}
+        await dismissCatchResult(serial);
         break;
       }
     } catch (err) {

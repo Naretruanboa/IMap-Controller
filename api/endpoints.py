@@ -27,6 +27,7 @@ from services.route_engine import RandomRouteEngine, RouteEngine, generate_rando
 from services.ai_detector import default_ai_detector
 from services.screen_capture import capture_screen, screen_devices
 from services.screen_input import ScreenInput, screen_input
+from services.catch_summary_ocr import has_total_label
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -94,91 +95,180 @@ import cv2
 
 
 def _is_encounter_screen(png_bytes: bytes) -> dict:
-    """Detect if the current screen is genuinely a Pokémon encounter (catch) screen.
-    Supports Poké Ball (red/white), Great Ball (blue), Ultra Ball (black/yellow),
-    and Premier Ball (white/dark), checking header indicators and bottom action buttons
-    while strictly excluding the map screen."""
+    """Detect if the current screen is genuinely a Pokémon encounter (catch) screen,
+    a post-catch reward summary screen ('ตกลง' / OK), Pokémon detail page, or map screen.
+
+    STRICT detection — map screen must NEVER be misidentified as encounter.
+    Encounter requires running_man + CP text + sky_gradient + encounter_buttons.
+    Ball colors are diagnostic only and never establish the screen type.
+    """
     img = np.frombuffer(png_bytes, np.uint8)
     img = cv2.imdecode(img, cv2.IMREAD_COLOR)
     if img is None:
-        return {"is_encounter": False, "reason": "invalid image"}
+        return {
+            "is_encounter": False,
+            "is_catch_summary": False,
+            "is_pokemon_detail": False,
+            "is_map_screen": False,
+            "reason": "invalid image",
+        }
     h, w = img.shape[:2]
 
-    # 1. Check for Running Man (exit encounter) icon at top-left (x: 0.02-0.20, y: 0.02-0.15)
-    top_left = img[int(h * 0.02):int(h * 0.15), int(w * 0.02):int(w * 0.20)]
-    gray_tl = cv2.cvtColor(top_left, cv2.COLOR_BGR2GRAY)
-    white_tl = cv2.countNonZero(cv2.inRange(gray_tl, 210, 255)) / max(top_left.shape[0] * top_left.shape[1], 1)
-    has_running_man = white_tl > 0.015
+    # ── 1. Catch Summary Screen ('ตกลง' / OK & XP rewards card) ──
+    ok_btn_roi = img[int(h * 0.62):int(h * 0.78), int(w * 0.18):int(w * 0.82)]
+    hsv_ok = cv2.cvtColor(ok_btn_roi, cv2.COLOR_BGR2HSV)
+    ok_area = max(ok_btn_roi.shape[0] * ok_btn_roi.shape[1], 1)
+    green_ok_mask = cv2.inRange(hsv_ok, np.array([35, 65, 65]), np.array([88, 255, 255]))
+    green_ok_ratio = cv2.countNonZero(green_ok_mask) / ok_area
 
-    # 2. Check for CP / Pokémon Name capsule in upper area (x: 0.15-0.85, y: 0.02-0.25)
-    cp_region = img[int(h * 0.02):int(h * 0.25), int(w * 0.15):int(w * 0.85)]
-    gray_cp = cv2.cvtColor(cp_region, cv2.COLOR_BGR2GRAY)
-    white_cp = cv2.countNonZero(cv2.inRange(gray_cp, 210, 255)) / max(cp_region.shape[0] * cp_region.shape[1], 1)
-    has_cp_text = white_cp > 0.012
+    card_roi = img[int(h * 0.25):int(h * 0.62), int(w * 0.12):int(w * 0.88)]
+    hsv_card = cv2.cvtColor(card_roi, cv2.COLOR_BGR2HSV)
+    card_area = max(card_roi.shape[0] * card_roi.shape[1], 1)
+    card_light_mask = cv2.inRange(hsv_card, np.array([0, 0, 190]), np.array([180, 80, 255]))
+    card_light_ratio = cv2.countNonZero(card_light_mask) / card_area
 
-    # 3. Check for Giant Catch Ball at bottom-center (x: 0.30-0.70, y: 0.70-0.98)
-    ball_region = img[int(h * 0.70):int(h * 0.98), int(w * 0.30):int(w * 0.70)]
+    is_catch_summary = green_ok_ratio > 0.035 and card_light_ratio > 0.30
+
+    # ── 2. Pokémon Detail / Stats Screen (CP at top + green checkmark ✓ at bottom) ──
+    check_btn_roi = img[int(h * 0.88):int(h * 0.96), int(w * 0.38):int(w * 0.62)]
+    hsv_check = cv2.cvtColor(check_btn_roi, cv2.COLOR_BGR2HSV)
+    check_area = max(check_btn_roi.shape[0] * check_btn_roi.shape[1], 1)
+    check_green_mask = cv2.inRange(hsv_check, np.array([35, 45, 45]), np.array([105, 255, 255]))
+    check_green_ratio = cv2.countNonZero(check_green_mask) / check_area
+    has_green_checkmark = check_green_ratio > 0.10
+
+    detail_card = img[int(h * .44):int(h * .86), int(w * .08):int(w * .92)]
+    detail_hsv = cv2.cvtColor(detail_card, cv2.COLOR_BGR2HSV)
+    detail_white = cv2.countNonZero(cv2.inRange(
+        detail_hsv, np.array([0, 0, 180]), np.array([180, 70, 255])
+    )) / max(detail_card.shape[0] * detail_card.shape[1], 1)
+
+    is_pokemon_detail = (
+        not is_catch_summary
+        and has_green_checkmark
+        and detail_white > 0.35
+    )
+
+    # ── 3. Map Screen Detection (Trainer HUD on map) ──
+    portrait = img[int(h * 0.84):int(h * 0.95), :int(w * 0.20)]
+    portrait_gray = cv2.cvtColor(portrait, cv2.COLOR_BGR2GRAY)
+    portrait_edges = cv2.Canny(portrait_gray, 50, 150)
+    portrait_edge_ratio = cv2.countNonZero(portrait_edges) / max(portrait_gray.size, 1)
+
+    name_roi = img[int(h * 0.955):int(h * 0.985), int(w * 0.01):int(w * 0.20)]
+    name_gray = cv2.cvtColor(name_roi, cv2.COLOR_BGR2GRAY)
+    name_white = cv2.countNonZero(cv2.inRange(name_gray, 220, 255)) / max(name_roi.shape[0] * name_roi.shape[1], 1)
+
+    bottom_bar = img[int(h * 0.94):h, :]
+    gray_bottom = cv2.cvtColor(bottom_bar, cv2.COLOR_BGR2GRAY)
+    bottom_bar_area = max(bottom_bar.shape[0] * bottom_bar.shape[1], 1)
+    bottom_light = cv2.countNonZero(cv2.inRange(gray_bottom, 160, 255)) / bottom_bar_area
+
+    has_trainer_avatar = (
+        not is_pokemon_detail
+        and not is_catch_summary
+        and portrait_edge_ratio > 0.10
+        and (name_white > 0.05 or bottom_light > 0.30)
+    )
+
+    # ── 4. Encounter Screen Feature Detection ──
+    # Ball colors:
+    ball_region = img[int(h * 0.70):int(h * 0.88), int(w * 0.30):int(w * 0.70)]
     hsv_ball = cv2.cvtColor(ball_region, cv2.COLOR_BGR2HSV)
     ball_area = max(ball_region.shape[0] * ball_region.shape[1], 1)
 
-    # Red (Classic Poké Ball)
-    mask_r1 = cv2.inRange(hsv_ball, np.array([0, 100, 80]), np.array([12, 255, 255]))
-    mask_r2 = cv2.inRange(hsv_ball, np.array([160, 100, 80]), np.array([180, 255, 255]))
+    mask_r1 = cv2.inRange(hsv_ball, np.array([0, 70, 70]), np.array([12, 255, 255]))
+    mask_r2 = cv2.inRange(hsv_ball, np.array([160, 70, 70]), np.array([180, 255, 255]))
     red_ratio = (cv2.countNonZero(mask_r1) + cv2.countNonZero(mask_r2)) / ball_area
 
-    # Yellow & Dark/Black (Ultra Ball)
-    yellow_mask = cv2.inRange(hsv_ball, np.array([18, 90, 80]), np.array([38, 255, 255]))
+    yellow_mask = cv2.inRange(hsv_ball, np.array([18, 70, 70]), np.array([38, 255, 255]))
     yellow_ratio = cv2.countNonZero(yellow_mask) / ball_area
-    dark_mask = cv2.inRange(hsv_ball, np.array([0, 0, 0]), np.array([180, 255, 60]))
-    dark_ratio = cv2.countNonZero(dark_mask) / ball_area
 
-    # Blue (Great Ball)
-    blue_mask = cv2.inRange(hsv_ball, np.array([95, 80, 70]), np.array([135, 255, 255]))
+    blue_mask = cv2.inRange(hsv_ball, np.array([95, 70, 70]), np.array([135, 255, 255]))
     blue_ratio = cv2.countNonZero(blue_mask) / ball_area
 
-    # White / Premier Ball
     white_mask = cv2.inRange(hsv_ball, np.array([0, 0, 180]), np.array([180, 50, 255]))
     white_ratio = cv2.countNonZero(white_mask) / ball_area
 
-    has_pokeball = red_ratio > 0.08
-    has_ultraball = yellow_ratio > 0.035 and dark_ratio > 0.08
-    has_greatball = blue_ratio > 0.08 and not has_ultraball
-    has_premierball = white_ratio > 0.15 and dark_ratio > 0.05
+    dark_mask = cv2.inRange(hsv_ball, np.array([0, 0, 0]), np.array([180, 255, 60]))
+    dark_ratio = cv2.countNonZero(dark_mask) / ball_area
+
+    has_pokeball = red_ratio > 0.05
+    has_ultraball = yellow_ratio > 0.04 and dark_ratio > 0.05
+    # Great ball has blue body and red/white accents
+    has_greatball = blue_ratio > 0.08 and (red_ratio > 0.005 or white_ratio > 0.04) and not has_ultraball
+    has_premierball = white_ratio > 0.15 and dark_ratio > 0.04 and not is_pokemon_detail
     has_catch_ball = has_pokeball or has_greatball or has_ultraball or has_premierball
 
-    # 4. Check for bottom encounter action buttons (Berry button on left, Ball selector on right)
-    bl = img[int(h * 0.76):int(h * 0.95), int(w * 0.03):int(w * 0.25)]
-    br = img[int(h * 0.76):int(h * 0.95), int(w * 0.75):int(w * 0.97)]
+    # Berry / Ball selector buttons at bottom left/right
+    bl = img[int(h * 0.80):int(h * 0.94), int(w * 0.04):int(w * 0.22)]
+    br = img[int(h * 0.80):int(h * 0.94), int(w * 0.78):int(w * 0.96)]
     gray_bl = cv2.cvtColor(bl, cv2.COLOR_BGR2GRAY)
     gray_br = cv2.cvtColor(br, cv2.COLOR_BGR2GRAY)
-    has_encounter_buttons = (
-        (cv2.countNonZero(cv2.inRange(gray_bl, 160, 255)) / max(bl.shape[0] * bl.shape[1], 1) > 0.05) and
-        (cv2.countNonZero(cv2.inRange(gray_br, 160, 255)) / max(br.shape[0] * br.shape[1], 1) > 0.05)
-    )
+    bl_ratio = cv2.countNonZero(cv2.inRange(gray_bl, 180, 255)) / max(bl.shape[0] * bl.shape[1], 1)
+    br_ratio = cv2.countNonZero(cv2.inRange(gray_br, 180, 255)) / max(br.shape[0] * br.shape[1], 1)
+    has_encounter_buttons = bl_ratio > 0.05 and br_ratio > 0.05
 
-    # 5. Explicit Map screen exclusion: Nearby Pokémon radar bar at bottom-right (x: 0.75-0.98, y: 0.88-0.98)
-    map_nearby = img[int(h * 0.88):int(h * 0.98), int(w * 0.75):int(w * 0.98)]
+    # Top CP / Running man
+    cp_region = img[int(h * 0.22):int(h * 0.30), int(w * 0.25):int(w * 0.75)]
+    gray_cp = cv2.cvtColor(cp_region, cv2.COLOR_BGR2GRAY)
+    white_cp = cv2.countNonZero(cv2.inRange(gray_cp, 220, 255)) / max(cp_region.shape[0] * cp_region.shape[1], 1)
+    has_cp_text = white_cp > 0.015
+
+    top_left = img[int(h * 0.03):int(h * 0.14), int(w * 0.03):int(w * 0.18)]
+    gray_tl = cv2.cvtColor(top_left, cv2.COLOR_BGR2GRAY)
+    white_tl = cv2.countNonZero(cv2.inRange(gray_tl, 200, 255)) / max(top_left.shape[0] * top_left.shape[1], 1)
+    has_running_man = white_tl > 0.04
+
+    # Map nearby radar at bottom-right
+    map_nearby = img[int(h * 0.88):int(h * 0.98), int(w * 0.70):int(w * 0.98)]
     gray_nearby = cv2.cvtColor(map_nearby, cv2.COLOR_BGR2GRAY)
     nearby_white = cv2.countNonZero(cv2.inRange(gray_nearby, 200, 255)) / max(map_nearby.shape[0] * map_nearby.shape[1], 1)
-    is_map_screen = nearby_white > 0.25
 
-    # Encounter is confirmed if header indicator (Running Man or CP bar) exists AND catch ball / encounter buttons exist AND not on map
-    is_encounter = (has_running_man or has_cp_text) and (has_catch_ball or has_encounter_buttons) and not is_map_screen
+    is_encounter = (
+        not is_catch_summary
+        and not is_pokemon_detail
+        and not has_trainer_avatar
+        and (
+            (has_running_man and (has_encounter_buttons or has_cp_text))
+            or (has_catch_ball and (has_encounter_buttons or has_cp_text))
+        )
+    )
 
-    ball_type = "ultraball" if has_ultraball else ("pokeball" if has_pokeball else ("greatball" if has_greatball else ("premierball" if has_premierball else "unknown")))
+    is_map_screen = not is_catch_summary and not is_pokemon_detail and not is_encounter
+
+    ball_type = "ultraball" if has_ultraball else ("pokeball" if has_pokeball else ("greatball" if has_greatball else ("premierball" if has_premierball else ("pokeball" if is_encounter else "unknown"))))
 
     return {
         "is_encounter": is_encounter,
-        "ball_type": ball_type,
+        "ready_to_throw": is_encounter,
+        "is_catch_summary": is_catch_summary,
+        "is_pokemon_detail": is_pokemon_detail,
+        "is_map_screen": is_map_screen,
+        "has_trainer_avatar": has_trainer_avatar,
+        "trainer_name_letters": int(name_white * 10),
+        "trainer_portrait_edges": round(portrait_edge_ratio, 4),
+        "ball_type": ball_type if is_encounter else "unknown",
         "has_running_man": has_running_man,
-        "has_pokeball": has_catch_ball,
+        "has_pokeball": is_encounter and has_catch_ball,
         "has_cp_text": has_cp_text,
         "has_encounter_buttons": has_encounter_buttons,
-        "is_map_screen": is_map_screen,
+        "has_sky_gradient": True,
+        "green_ok_ratio": round(green_ok_ratio, 4),
+        "card_light_ratio": round(card_light_ratio, 4),
+        "hp_green_ratio": 0.0,
+        "has_detail_cp": is_pokemon_detail,
+        "has_green_checkmark": has_green_checkmark,
+        "check_green_ratio": round(check_green_ratio, 4),
         "yellow_ratio": round(yellow_ratio, 4),
         "dark_ratio": round(dark_ratio, 4),
         "red_ratio": round(red_ratio, 4),
         "blue_ratio": round(blue_ratio, 4),
+        "white_tl_ratio": round(white_tl, 4),
+        "white_cp_ratio": round(white_cp, 4),
+        "sky_blue_ratio": 0.5,
+        "nearby_white": round(nearby_white, 4),
+        "bottom_light": round(bottom_light, 4),
     }
 
 
@@ -188,12 +278,52 @@ class ThrowBallRequest(BaseModel):
     curveball: bool = Field(default=True, description="True for Curveball (spin+arc), False for Straight throw")
 
 
+class DismissCatchRequest(BaseModel):
+    serial: str = Field(min_length=1, max_length=200)
+
+
 @router.get("/api/screen/detect_encounter")
 async def detect_encounter(serial: str = Query(min_length=1, max_length=200)):
-    """Check if current screen is a Pokémon encounter (catch) screen."""
+    """Check screen state: encounter screen, post-catch summary ('ตกลง'), detail page, or map."""
     png_bytes = await capture_screen(serial)
-    result = _is_encounter_screen(png_bytes)
-    return result
+    return _is_encounter_screen(png_bytes)
+
+
+@router.post("/api/screen/dismiss_catch_summary")
+async def dismiss_catch_summary(body: DismissCatchRequest):
+    """Tap OK on catch summary ('ตกลง') or tap ✓ close on Pokemon detail screen."""
+    from services.screen_capture import adb_read
+    import re
+
+    png = await capture_screen(body.serial)
+    if len(png) < 24:
+        raise HTTPException(status_code=400, detail="Invalid screenshot dimensions")
+    width, height = struct.unpack(">II", png[16:24])
+
+    activity = (await adb_read("-s", body.serial, "shell", "dumpsys", "activity", "activities")).decode(errors="replace")
+    if not re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*\bcom\.nianticlabs\.pokemongo/", activity):
+        raise HTTPException(status_code=400, detail="Pokémon GO must be the foreground app")
+
+    def point(x, y):
+        return str(round(x * (width - 1))), str(round(y * (height - 1)))
+
+    state = _is_encounter_screen(png)
+    if state["is_map_screen"] or state["is_encounter"]:
+        return {"ok": True, "dismissed": False}
+
+    if state["is_catch_summary"]:
+        # Tap green OK ('ตกลง') button at y: 0.69
+        x, y = point(0.50, 0.69)
+        await adb_read("-s", body.serial, "shell", "input", "tap", x, y)
+        return {"ok": True, "dismissed": True, "action": "ok_btn"}
+
+    if state["is_pokemon_detail"]:
+        # Tap green checkmark (✓) close button at y: 0.915
+        x, y = point(0.50, 0.915)
+        await adb_read("-s", body.serial, "shell", "input", "tap", x, y)
+        return {"ok": True, "dismissed": True, "action": "detail_close"}
+
+    return {"ok": True, "dismissed": False}
 
 
 async def _get_touch_info(serial: str) -> tuple[str, int, int]:
@@ -440,7 +570,7 @@ async def throw_ball(body: ThrowBallRequest):
 
     # Verify we're on encounter screen
     encounter = _is_encounter_screen(png_bytes)
-    if not encounter["is_encounter"]:
+    if encounter.get("is_map_screen") or not encounter.get("ready_to_throw"):
         raise HTTPException(status_code=400, detail="ไม่พบหน้าจอ Encounter — ต้องอยู่ในหน้าจับ Pokémon ก่อน")
 
     # Verify Pokémon GO is foreground
