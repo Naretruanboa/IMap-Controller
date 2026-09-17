@@ -32,7 +32,7 @@ from services.catch_summary_ocr import has_total_label
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 
 @router.get("/api/version")
@@ -171,7 +171,7 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
     )
 
     # ── 4. Encounter Screen Feature Detection ──
-    # Ball colors:
+    # 4A. Ball in center bottom (Pokeball / Great Ball / Ultra Ball / Premier Ball)
     ball_region = img[int(h * 0.70):int(h * 0.88), int(w * 0.30):int(w * 0.70)]
     hsv_ball = cv2.cvtColor(ball_region, cv2.COLOR_BGR2HSV)
     ball_area = max(ball_region.shape[0] * ball_region.shape[1], 1)
@@ -192,32 +192,35 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
     dark_mask = cv2.inRange(hsv_ball, np.array([0, 0, 0]), np.array([180, 255, 60]))
     dark_ratio = cv2.countNonZero(dark_mask) / ball_area
 
-    has_pokeball = red_ratio > 0.05
-    has_ultraball = yellow_ratio > 0.04 and dark_ratio > 0.05
+    has_pokeball = red_ratio > 0.04
+    has_ultraball = yellow_ratio > 0.035 and dark_ratio > 0.04
     # Great ball has blue body and red/white accents
-    has_greatball = blue_ratio > 0.08 and (red_ratio > 0.005 or white_ratio > 0.04) and not has_ultraball
+    has_greatball = blue_ratio > 0.06 and (red_ratio > 0.005 or white_ratio > 0.04) and not has_ultraball
     has_premierball = white_ratio > 0.15 and dark_ratio > 0.04 and not is_pokemon_detail
-    has_catch_ball = has_pokeball or has_greatball or has_ultraball or has_premierball
+    has_catch_ball = has_pokeball or has_greatball or has_ultraball or has_premierball or (white_ratio > 0.06 and (red_ratio > 0.02 or yellow_ratio > 0.02 or blue_ratio > 0.02))
 
-    # Berry / Ball selector buttons at bottom left/right
+    # 4B. Berry menu button bottom left & Ball selector menu button bottom right
     bl = img[int(h * 0.80):int(h * 0.94), int(w * 0.04):int(w * 0.22)]
     br = img[int(h * 0.80):int(h * 0.94), int(w * 0.78):int(w * 0.96)]
     gray_bl = cv2.cvtColor(bl, cv2.COLOR_BGR2GRAY)
     gray_br = cv2.cvtColor(br, cv2.COLOR_BGR2GRAY)
-    bl_ratio = cv2.countNonZero(cv2.inRange(gray_bl, 180, 255)) / max(bl.shape[0] * bl.shape[1], 1)
-    br_ratio = cv2.countNonZero(cv2.inRange(gray_br, 180, 255)) / max(br.shape[0] * br.shape[1], 1)
-    has_encounter_buttons = bl_ratio > 0.05 and br_ratio > 0.05
+    bl_ratio = cv2.countNonZero(cv2.inRange(gray_bl, 140, 255)) / max(bl.shape[0] * bl.shape[1], 1)
+    br_ratio = cv2.countNonZero(cv2.inRange(gray_br, 140, 255)) / max(br.shape[0] * br.shape[1], 1)
+    has_berry_button = bl_ratio > 0.05
+    has_ball_selector = br_ratio > 0.05
+    has_encounter_buttons = has_berry_button and has_ball_selector
 
-    # Top CP / Running man
+    # 4C. Running man flee icon top left
+    top_left = img[int(h * 0.03):int(h * 0.14), int(w * 0.03):int(w * 0.18)]
+    gray_tl = cv2.cvtColor(top_left, cv2.COLOR_BGR2GRAY)
+    white_tl = cv2.countNonZero(cv2.inRange(gray_tl, 180, 255)) / max(top_left.shape[0] * top_left.shape[1], 1)
+    has_running_man = white_tl > 0.03
+
+    # 4D. Top CP / Running man text
     cp_region = img[int(h * 0.22):int(h * 0.30), int(w * 0.25):int(w * 0.75)]
     gray_cp = cv2.cvtColor(cp_region, cv2.COLOR_BGR2GRAY)
     white_cp = cv2.countNonZero(cv2.inRange(gray_cp, 220, 255)) / max(cp_region.shape[0] * cp_region.shape[1], 1)
     has_cp_text = white_cp > 0.015
-
-    top_left = img[int(h * 0.03):int(h * 0.14), int(w * 0.03):int(w * 0.18)]
-    gray_tl = cv2.cvtColor(top_left, cv2.COLOR_BGR2GRAY)
-    white_tl = cv2.countNonZero(cv2.inRange(gray_tl, 200, 255)) / max(top_left.shape[0] * top_left.shape[1], 1)
-    has_running_man = white_tl > 0.04
 
     # Map nearby radar at bottom-right
     map_nearby = img[int(h * 0.88):int(h * 0.98), int(w * 0.70):int(w * 0.98)]
@@ -228,10 +231,9 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
         not is_catch_summary
         and not is_pokemon_detail
         and not has_trainer_avatar
-        and (
-            (has_running_man and (has_encounter_buttons or has_cp_text))
-            or (has_catch_ball and (has_encounter_buttons or has_cp_text))
-        )
+        and has_running_man
+        and has_encounter_buttons
+        and has_catch_ball
     )
 
     is_map_screen = not is_catch_summary and not is_pokemon_detail and not is_encounter
@@ -249,6 +251,8 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
         "trainer_portrait_edges": round(portrait_edge_ratio, 4),
         "ball_type": ball_type if is_encounter else "unknown",
         "has_running_man": has_running_man,
+        "has_berry_button": has_berry_button,
+        "has_ball_selector": has_ball_selector,
         "has_pokeball": is_encounter and has_catch_ball,
         "has_cp_text": has_cp_text,
         "has_encounter_buttons": has_encounter_buttons,
