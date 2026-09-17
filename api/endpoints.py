@@ -115,19 +115,18 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
     h, w = img.shape[:2]
 
     # ── 1. Catch Summary Screen ('ตกลง' / OK & XP rewards card) ──
-    ok_btn_roi = img[int(h * 0.62):int(h * 0.78), int(w * 0.18):int(w * 0.82)]
+    # The OK button is a large prominent green capsule button at y: 0.65-0.73, x: 0.32-0.68
+    ok_btn_roi = img[int(h * 0.65):int(h * 0.73), int(w * 0.32):int(w * 0.68)]
     hsv_ok = cv2.cvtColor(ok_btn_roi, cv2.COLOR_BGR2HSV)
-    ok_area = max(ok_btn_roi.shape[0] * ok_btn_roi.shape[1], 1)
-    green_ok_mask = cv2.inRange(hsv_ok, np.array([35, 65, 65]), np.array([88, 255, 255]))
-    green_ok_ratio = cv2.countNonZero(green_ok_mask) / ok_area
+    ok_mask = cv2.inRange(hsv_ok, np.array([35, 70, 70]), np.array([85, 255, 255]))
+    green_ok_ratio = cv2.countNonZero(ok_mask) / max(ok_btn_roi.shape[0] * ok_btn_roi.shape[1], 1)
 
     card_roi = img[int(h * 0.25):int(h * 0.62), int(w * 0.12):int(w * 0.88)]
     hsv_card = cv2.cvtColor(card_roi, cv2.COLOR_BGR2HSV)
-    card_area = max(card_roi.shape[0] * card_roi.shape[1], 1)
     card_light_mask = cv2.inRange(hsv_card, np.array([0, 0, 190]), np.array([180, 80, 255]))
-    card_light_ratio = cv2.countNonZero(card_light_mask) / card_area
+    card_light_ratio = cv2.countNonZero(card_light_mask) / max(card_roi.shape[0] * card_roi.shape[1], 1)
 
-    is_catch_summary = green_ok_ratio > 0.035 and card_light_ratio > 0.30
+    is_catch_summary = green_ok_ratio > 0.45 and card_light_ratio > 0.40
 
     # ── 2. Pokémon Detail / Stats Screen (CP at top + green checkmark ✓ at bottom) ──
     check_btn_roi = img[int(h * 0.88):int(h * 0.96), int(w * 0.38):int(w * 0.62)]
