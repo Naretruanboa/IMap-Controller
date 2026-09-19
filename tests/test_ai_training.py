@@ -1,3 +1,6 @@
+import json
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -71,6 +74,26 @@ def test_training_dataset_uses_selected_label_source(tmp_path):
     assert manual_yaml.parent.name == "manual"
     assert (auto_yaml.parent / "labels/train/frame_0.txt").read_text().startswith("0 ")
     assert (manual_yaml.parent / "labels/train/frame_0.txt").read_text().startswith("3 ")
+
+
+def test_model_registry_migrates_existing_legacy_id(tmp_path):
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    legacy_path = models_dir / "pokestop_yolov8n.onnx"
+    legacy_path.write_bytes(b"model")
+    (models_dir / "registry.json").write_text(json.dumps({
+        "models": [{
+            "id": "legacy-yolov8n",
+            "path": "/old/location/pokestop_yolov8n.onnx",
+            "created_at": "2026-09-19T18:49:55",
+        }],
+    }))
+
+    service = AITrainingService(tmp_path)
+
+    with sqlite3.connect(service.registry_db_path) as conn:
+        row = conn.execute("SELECT id, path FROM models WHERE id = 'legacy-yolov8n'").fetchone()
+    assert row == ("legacy-yolov8n", "models/pokestop_yolov8n.onnx")
 
 
 def test_manual_training_clips_only_staged_labels(tmp_path):

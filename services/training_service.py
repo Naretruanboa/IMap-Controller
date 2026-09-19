@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 class AITrainingService:
     """Manages dataset collection, auto-labeling, and YOLO training in the background."""
 
-    def __init__(self, base_dir: Path | str = "."):
-        self.base_dir = Path(base_dir).resolve()
+    def __init__(self, base_dir: Path | str | None = None):
+        self.base_dir = (Path(base_dir) if base_dir else Path(__file__).resolve().parents[1]).resolve()
         self.dataset_dir = self.base_dir / "dataset"
         self.images_dir = self.dataset_dir / "images"
         self.labels_dir = self.dataset_dir / "labels"
@@ -63,6 +63,22 @@ class AITrainingService:
         self._init_model_registry()
         self._load_active_model()
 
+    def _stored_model_path(self, path: Path | str) -> str:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            return candidate.as_posix()
+        try:
+            return candidate.resolve().relative_to(self.base_dir).as_posix()
+        except ValueError:
+            parts = candidate.parts
+            if "models" in parts:
+                return Path(*parts[parts.index("models"):]).as_posix()
+            return (Path("models") / candidate.name).as_posix()
+
+    def _resolve_model_path(self, stored_path: str) -> Path:
+        path = Path(stored_path)
+        return path if path.is_absolute() else self.base_dir / path
+
     def _init_model_registry(self) -> None:
         self.models_dir.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.registry_db_path) as conn:
@@ -90,6 +106,10 @@ class AITrainingService:
                     value TEXT
                 );
             """)
+            for model_id, stored_path in conn.execute("SELECT id, path FROM models").fetchall():
+                normalized_path = self._stored_model_path(stored_path)
+                if normalized_path != stored_path:
+                    conn.execute("UPDATE models SET path = ? WHERE id = ?", (normalized_path, model_id))
             count = conn.execute("SELECT COUNT(*) FROM models").fetchone()[0]
             legacy_registry_path = self.models_dir / "registry.json"
             if count == 0 and legacy_registry_path.exists():
@@ -102,24 +122,42 @@ class AITrainingService:
                         """INSERT OR IGNORE INTO models
                            (id, version, path, created_at, label_source, epochs, imgsz, size_bytes, metrics_json, created_by)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (item["id"], item.get("version", item["id"]), item["path"], item["created_at"],
+                        (item["id"], item.get("version", item["id"]), self._stored_model_path(item["path"]), item["created_at"],
                          item.get("label_source", "legacy"), item.get("epochs"), item.get("imgsz"),
                          item.get("size_bytes", 0), json.dumps(item.get("metrics", {})), "json-migration"),
                     )
                 if legacy.get("active_id"):
                     conn.execute("INSERT OR REPLACE INTO registry_state(key, value) VALUES ('active_id', ?)", (legacy["active_id"],))
             legacy_path = self.models_dir / "pokestop_yolov8n.onnx"
-            existing = conn.execute("SELECT 1 FROM models WHERE path = ?", (str(legacy_path.resolve()),)).fetchone()
+            stored_legacy_path = self._stored_model_path(legacy_path)
+            existing = conn.execute("SELECT 1 FROM models WHERE path = ?", (stored_legacy_path,)).fetchone()
             if legacy_path.is_file() and not existing:
-                conn.execute(
-                    """INSERT INTO models (id, version, path, created_at, label_source, imgsz, size_bytes, created_by)
-                       VALUES (?, ?, ?, ?, 'legacy', 640, ?, 'legacy-migration')""",
-                    ("legacy-yolov8n", "legacy-yolov8n", str(legacy_path.resolve()),
-                     datetime.fromtimestamp(legacy_path.stat().st_mtime).isoformat(timespec="seconds"), legacy_path.stat().st_size),
+                legacy_id = "legacy-yolov8n"
+                legacy_metadata = (
+                    legacy_id,
+                    legacy_id,
+                    stored_legacy_path,
+                    datetime.fromtimestamp(legacy_path.stat().st_mtime).isoformat(timespec="seconds"),
+                    legacy_path.stat().st_size,
                 )
+                existing_id = conn.execute("SELECT 1 FROM models WHERE id = ?", (legacy_id,)).fetchone()
+                if existing_id:
+                    conn.execute(
+                        """UPDATE models
+                           SET version = ?, path = ?, created_at = ?, label_source = 'legacy',
+                               imgsz = 640, size_bytes = ?, created_by = 'legacy-migration'
+                           WHERE id = ?""",
+                        (legacy_metadata[1], legacy_metadata[2], legacy_metadata[3], legacy_metadata[4], legacy_id),
+                    )
+                else:
+                    conn.execute(
+                        """INSERT INTO models (id, version, path, created_at, label_source, imgsz, size_bytes, created_by)
+                           VALUES (?, ?, ?, ?, 'legacy', 640, ?, 'legacy-migration')""",
+                        legacy_metadata,
+                    )
                 active = conn.execute("SELECT value FROM registry_state WHERE key = 'active_id'").fetchone()
                 if not active:
-                    conn.execute("INSERT INTO registry_state(key, value) VALUES ('active_id', 'legacy-yolov8n')")
+                    conn.execute("INSERT INTO registry_state(key, value) VALUES ('active_id', ?)", (legacy_id,))
 
     @staticmethod
     def _row_to_model(row: sqlite3.Row) -> dict[str, Any]:
@@ -132,15 +170,15 @@ class AITrainingService:
             row = conn.execute(
                 "SELECT path FROM models WHERE id = (SELECT value FROM registry_state WHERE key = 'active_id')"
             ).fetchone()
-        if row and Path(row[0]).is_file():
-            default_ai_detector.model_path = Path(row[0])
+        if row and self._resolve_model_path(row[0]).is_file():
+            default_ai_detector.model_path = self._resolve_model_path(row[0])
             default_ai_detector._load_model()
 
     def list_models(self) -> dict[str, Any]:
         with sqlite3.connect(self.registry_db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM models ORDER BY created_at DESC").fetchall()
-            models = [self._row_to_model(row) for row in rows if Path(row["path"]).is_file()]
+            models = [self._row_to_model(row) for row in rows if self._resolve_model_path(row["path"]).is_file()]
             active = conn.execute("SELECT value FROM registry_state WHERE key = 'active_id'").fetchone()
         return {"active_id": active[0] if active else None, "models": models}
 
@@ -182,7 +220,7 @@ class AITrainingService:
         metadata = {
             "id": model_id,
             "version": model_id,
-            "path": str(version_path.resolve()),
+            "path": self._stored_model_path(version_path),
             "created_at": now.isoformat(timespec="seconds"),
             "label_source": label_source,
             "epochs": epochs,
@@ -209,9 +247,10 @@ class AITrainingService:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM models WHERE id = ?", (model_id,)).fetchone()
             model = self._row_to_model(row) if row else None
-        if not model or not Path(model["path"]).is_file():
+        model_path = self._resolve_model_path(model["path"]) if model else None
+        if not model or not model_path.is_file():
             raise ValueError("Model version not found")
-        default_ai_detector.model_path = Path(model["path"])
+        default_ai_detector.model_path = model_path
         default_ai_detector._load_model()
         with sqlite3.connect(self.registry_db_path) as conn:
             self._activate_in_connection(conn, model_id)
@@ -224,7 +263,7 @@ class AITrainingService:
         model = next((item for item in registry["models"] if item["id"] == model_id), None)
         if not model:
             raise ValueError("Model version not found")
-        Path(model["path"]).unlink(missing_ok=True)
+        self._resolve_model_path(model["path"]).unlink(missing_ok=True)
         with sqlite3.connect(self.registry_db_path) as conn:
             conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
         return {"deleted": model_id}
