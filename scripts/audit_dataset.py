@@ -3,18 +3,17 @@
 import argparse
 import hashlib
 import json
+import sys
 from collections import Counter
 from pathlib import Path
 
 import yaml
 
-CLASS_NAMES = {
-    0: "pokestop_active",
-    1: "pokestop_cooldown",
-    2: "pokestop_distant",
-    3: "gym",
-    4: "pokemon",
-}
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from models.class_config import load_class_names
+
+CLASS_NAMES = load_class_names()
 EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -51,12 +50,14 @@ def audit(data_yaml: Path) -> dict:
     names = config.get("names", {})
     if isinstance(names, list):
         names = dict(enumerate(names))
+    names = {int(class_id): str(name) for class_id, name in names.items()}
+    class_names = names
     root = Path(config.get("path", data_yaml.resolve().parent))
     if not root.is_absolute():
         root = data_yaml.resolve().parent / root
     issues = []
-    if names != CLASS_NAMES:
-        issues.append("Class mapping must be exactly 0 active, 1 cooldown, 2 distant, 3 gym.")
+    if not class_names:
+        issues.append("Dataset must define at least one class in names.")
     splits = {}
     members = {}
     hashes = {}
@@ -84,7 +85,7 @@ def audit(data_yaml: Path) -> dict:
                         raise ValueError()
                     cid = int(parts[0])
                     x, y, w, h = map(float, parts[1:])
-                    if cid not in CLASS_NAMES or not (
+                    if cid not in class_names or not (
                         0 < w <= 1.0001
                         and 0 < h <= 1.0001
                         and -0.0001 <= x - w / 2
@@ -101,14 +102,14 @@ def audit(data_yaml: Path) -> dict:
         splits[split] = {
             "images": len(paths),
             "unique_image_hashes": len(hashes[split]),
-            "boxes": {name: counts[cid] for cid, name in CLASS_NAMES.items()},
-            "images_per_class": {name: frames[cid] for cid, name in CLASS_NAMES.items()},
+            "boxes": {name: counts[cid] for cid, name in class_names.items()},
+            "images_per_class": {name: frames[cid] for cid, name in class_names.items()},
             "missing_labels": missing,
             "invalid_labels": invalid,
         }
         if not paths or missing or invalid:
             issues.append(f"{split}: empty split, missing labels or invalid annotations.")
-        for cid, name in CLASS_NAMES.items():
+        for cid, name in class_names.items():
             if not frames[cid]:
                 issues.append(f"{split}: no labeled examples for {name}.")
     for i, first in enumerate(splits):
@@ -120,7 +121,7 @@ def audit(data_yaml: Path) -> dict:
                     f"{first}/{second}: {shared_paths} shared image paths, {shared_content} shared image contents. Split by capture session, not adjacent frames."
                 )
     all_images = members["train"] | members["val"]
-    for cid, name in CLASS_NAMES.items():
+    for cid, name in class_names.items():
         annotated = sum(
             any(
                 line.split() and line.split()[0] == str(cid) for line in label_for(p).read_text().splitlines()
@@ -137,6 +138,7 @@ def audit(data_yaml: Path) -> dict:
         "splits": splits,
         "ready_for_training": not issues,
         "blocking_issues": issues,
+        "classes": class_names,
         "notes": [
             "Valid label syntax does not prove annotation correctness. Review every object, including Gym examples mislabeled as active.",
             "Do not treat adjacent frames of the same scene as independent validation.",

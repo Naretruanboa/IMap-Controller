@@ -9,6 +9,7 @@ import io
 from PIL import Image
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
+from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from models.schemas import (
@@ -32,7 +33,7 @@ from services.catch_summary_ocr import has_total_label
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 
 @router.get("/api/version")
@@ -622,6 +623,7 @@ class DatasetCollectRequest(BaseModel):
 class TrainRequest(BaseModel):
     epochs: int = Field(default=50, ge=1, le=300)
     imgsz: int = Field(default=640, ge=320, le=1280)
+    label_source: Literal["auto", "manual"] = "auto"
 
 
 @router.get("/api/ai/dataset/status")
@@ -653,7 +655,7 @@ async def post_dataset_auto_label():
 @router.post("/api/ai/train/start")
 async def post_train_start(body: TrainRequest):
     try:
-        return default_training_service.start_training(body.epochs, body.imgsz)
+        return default_training_service.start_training(body.epochs, body.imgsz, body.label_source)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

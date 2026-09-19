@@ -137,7 +137,8 @@ nav {
   display: grid;
   gap: 5px;
 }
-nav button {
+nav button,
+nav .nav-link-btn {
   display: flex;
   gap: 14px;
   align-items: center;
@@ -146,8 +147,16 @@ nav button {
   padding: 12px;
   font-size: 18px;
   text-align: left;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 8px;
+  cursor: pointer;
 }
-nav button span {
+nav .nav-link-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+nav button span,
+nav .nav-link-btn span {
   font-size: 13px;
   flex: 1;
 }
@@ -431,12 +440,14 @@ body.sidebar-collapsed .brand {
 body.sidebar-collapsed .brand span,
 body.sidebar-collapsed .workspace-label,
 body.sidebar-collapsed nav button span,
+body.sidebar-collapsed nav .nav-link-btn span,
 body.sidebar-collapsed nav kbd,
 body.sidebar-collapsed .device-card > :not(.eyebrow),
 body.sidebar-collapsed .sidebar-bottom {
   display: none;
 }
-body.sidebar-collapsed nav button {
+body.sidebar-collapsed nav button,
+body.sidebar-collapsed nav .nav-link-btn {
   justify-content: center;
   gap: 0;
   padding: 12px 6px;
@@ -948,6 +959,7 @@ footer strong {
   body.sidebar-collapsed .brand span,
   body.sidebar-collapsed .workspace-label,
   body.sidebar-collapsed nav button span,
+  body.sidebar-collapsed nav .nav-link-btn span,
   body.sidebar-collapsed .device-card > :not(.eyebrow),
   body.sidebar-collapsed .sidebar-bottom {
     display: revert;
@@ -955,7 +967,8 @@ footer strong {
   body.sidebar-collapsed nav kbd {
     display: none;
   }
-  body.sidebar-collapsed nav button {
+  body.sidebar-collapsed nav button,
+  body.sidebar-collapsed nav .nav-link-btn {
     justify-content: initial;
     gap: 14px;
     padding: 9px;
@@ -977,7 +990,8 @@ footer strong {
     display: flex;
     overflow: auto;
   }
-  nav button {
+  nav button,
+  nav .nav-link-btn {
     white-space: nowrap;
     padding: 9px;
   }

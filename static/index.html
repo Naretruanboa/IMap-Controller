@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Pokemon GO Controller v2.7.0 · GPS & AI Catch</title>
+    <title>Pokemon GO Controller v2.8.0 · GPS & AI Catch</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css" />
     <link rel="stylesheet" href="/static/css/app.css" />
   </head>
@@ -20,7 +20,7 @@
         ‹
       </button>
       <a class="brand" href="/"
-        >⌖ <span>Pokemon GO Controller<small>GPS & AUTO-CATCH CONTROLLER <span style="display:inline-block;margin-left:4px;padding:1px 5px;background:rgba(0,229,255,0.18);color:#00e5ff;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.5px;border:1px solid rgba(0,229,255,0.35);">v2.7.0</span></small></span></a
+        >⌖ <span>Pokemon GO Controller<small>GPS & AUTO-CATCH CONTROLLER <span style="display:inline-block;margin-left:4px;padding:1px 5px;background:rgba(0,229,255,0.18);color:#00e5ff;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.5px;border:1px solid rgba(0,229,255,0.35);">v2.8.0</span></small></span></a
       >
       <div class="workspace-label">
         WORKSPACE <span id="provider">LOCAL</span>
@@ -40,6 +40,8 @@
           ▧ <span>Screen Studio</span><kbd>06</kbd></button
         ><button data-mode="ai-trainer">
           ⚡ <span>AI Trainer</span><kbd>07</kbd></button
+        ><a class="nav-link-btn" href="/annotation" target="_blank" title="Annotation Editor">
+          🏷 <span>Annotation</span><kbd>08</kbd></a
         ><button data-mode="gpx">⇧ <span>Import GPX</span></button
         ><button data-mode="favorites">☆ <span>Favorites</span></button
         ><button data-mode="history">◷ <span>History</span></button
@@ -69,18 +71,18 @@
       </section>
       <div class="sidebar-bottom">
         <span class="local-dot"></span> Runs locally on your Mac<small
-          >Pokemon GO Controller <strong>v2.7.0</strong> · AI & Auto-Catch</small
+          >Pokemon GO Controller <strong>v2.8.0</strong> · AI & Auto-Catch</small
         >
       </div>
     </aside>
     <main>
       <header>
         <div>
-          <div class="eyebrow">POKEMON GO CONTROLLER · <span style="color:#00e5ff;font-weight:600;">v2.7.0</span></div>
+          <div class="eyebrow">POKEMON GO CONTROLLER · <span style="color:#00e5ff;font-weight:600;">v2.8.0</span></div>
           <h1 id="mode-title">Teleport</h1>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
-          <span class="badge" style="background:rgba(0,229,255,0.12);color:#00e5ff;border:1px solid rgba(0,229,255,0.3);font-weight:600;">v2.7.0</span>
+          <span class="badge" style="background:rgba(0,229,255,0.12);color:#00e5ff;border:1px solid rgba(0,229,255,0.3);font-weight:600;">v2.8.0</span>
           <span id="socket-status" class="badge">Connecting…</span>
           <button id="restore" class="restore">↶ Restore Real Location</button>
         </div>
@@ -121,6 +123,7 @@
             <button id="screen-capture-once" class="quiet" type="button" title="จับภาพหน้าจอใหม่ทันที">↻ จับภาพ</button>
             <label class="checkbox-label"><input id="screen-live-chk" type="checkbox" checked /><span>Live</span></label>
             <label class="checkbox-label"><input id="screen-auto-spin-chk" type="checkbox" /><span>Auto-Spin</span></label>
+            <label class="checkbox-label"><input id="screen-auto-pokemon-chk" type="checkbox" /><span>Auto-Click Pokémon</span></label>
             <label class="checkbox-label"><input id="screen-auto-catch-chk" type="checkbox" /><span>Auto-Catch</span></label>
           </div>
         </section>
@@ -193,6 +196,12 @@
               <label class="checkbox-label">
                 <input id="screen-auto-spin-toggle" type="checkbox" />
                 <span>⚡ หมุนเสาอัตโนมัติ (Auto-Spin เมื่อพบเสาพร้อมหมุน)</span>
+              </label>
+            </div>
+            <div class="field-group" style="margin-top:6px">
+              <label class="checkbox-label">
+                <input id="screen-auto-pokemon-toggle" type="checkbox" />
+                <span>🌟 คลิก Pokémon อัตโนมัติเมื่อพบในแผนที่</span>
               </label>
             </div>
             <div class="field-group" style="margin-top:6px">
@@ -296,6 +305,11 @@
                 <div style="flex:1"><label class="eyebrow">Epochs</label><select id="ai-train-epochs"><option value="10">10 Epochs (เร็ว)</option><option value="30" selected>30 Epochs (แนะนำ)</option><option value="50">50 Epochs (ละเอียด)</option><option value="100">100 Epochs</option></select></div>
                 <div style="flex:1"><label class="eyebrow">Image Size</label><select id="ai-train-imgsz"><option value="640" selected>640 px</option><option value="480">480 px</option></select></div>
               </div>
+              <label class="eyebrow" for="ai-train-label-source">Label source</label>
+              <select id="ai-train-label-source">
+                <option value="auto" selected>Auto labels (dataset/labels)</option>
+                <option value="manual">Manual completed labels (dataset/completed)</option>
+              </select>
               <div class="row" style="margin-top:8px">
                 <button id="ai-start-train-btn" class="primary" type="button">🚀 เริ่มเทรนโมเดล</button>
                 <button id="ai-stop-train-btn" class="quiet" type="button" disabled>⏹ หยุด</button>

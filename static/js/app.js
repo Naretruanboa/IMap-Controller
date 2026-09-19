@@ -894,6 +894,8 @@ let screenLiveTimer = null;
 let currentScreenBoxes = [];
 let activeSpinWorkflow = null;
 let lastSpinTimestamp = 0;
+let activePokemonTap = false;
+let lastPokemonTapTimestamp = 0;
 
 function syncLiveToggles(isLive) {
   if ($("#screen-live-chk")) $("#screen-live-chk").checked = isLive;
@@ -903,6 +905,11 @@ function syncLiveToggles(isLive) {
 function syncAutoSpinToggles(isAuto) {
   if ($("#screen-auto-spin-chk")) $("#screen-auto-spin-chk").checked = isAuto;
   if ($("#screen-auto-spin-toggle")) $("#screen-auto-spin-toggle").checked = isAuto;
+}
+
+function syncAutoPokemonToggles(isAuto) {
+  if ($("#screen-auto-pokemon-chk")) $("#screen-auto-pokemon-chk").checked = isAuto;
+  if ($("#screen-auto-pokemon-toggle")) $("#screen-auto-pokemon-toggle").checked = isAuto;
 }
 
 function syncAutoCatchToggles(isAuto) {
@@ -917,6 +924,13 @@ function isLiveEnabled() {
 
 function isAutoSpinEnabled() {
   return Boolean($("#screen-auto-spin-chk")?.checked || $("#screen-auto-spin-toggle")?.checked);
+}
+
+function isAutoPokemonEnabled() {
+  return Boolean(
+    $("#screen-auto-pokemon-chk")?.checked ||
+    $("#screen-auto-pokemon-toggle")?.checked
+  );
 }
 
 function isAutoCatchEnabled() {
@@ -1105,6 +1119,44 @@ function appendSpinLog(step, message) {
   }
 }
 
+async function clickDetectedPokemon(serial, boxes) {
+  if (!isAutoPokemonEnabled() || activePokemonTap || Date.now() - lastPokemonTapTimestamp < 8000) {
+    return false;
+  }
+
+  const target = chooseDetectedPokemon(boxes);
+  if (!target) return false;
+
+  const width = screenFrameBitmap?.width || 1;
+  const height = screenFrameBitmap?.height || 1;
+  const targetX = target.targetX ?? target.x + target.width / 2;
+  const targetY = target.targetY ?? target.y + target.height / 2;
+  const point = {
+    x: Math.max(0, Math.min(1, targetX / width)),
+    y: Math.max(0, Math.min(1, targetY / height)),
+  };
+
+  activePokemonTap = true;
+  lastPokemonTapTimestamp = Date.now();
+  try {
+    appendSpinLog("auto-pokemon", `🌟 พบ Pokémon (${target.score}%) — กำลังคลิกเพื่อเข้า Encounter`);
+    await api("/api/screen/input", { serial, action: "tap", ...point });
+    return true;
+  } catch (err) {
+    appendSpinLog("error", `คลิก Pokémon ไม่สำเร็จ: ${err.message || err}`);
+    return false;
+  } finally {
+    activePokemonTap = false;
+  }
+}
+
+function chooseDetectedPokemon(boxes) {
+  const threshold = Number($("#screen-threshold")?.value || 40);
+  return boxes
+    .filter((box) => (box.class_name === "pokemon" || box.kind === "pokemon") && box.score >= threshold)
+    .sort((a, b) => b.score - a.score)[0];
+}
+
 let activeCatchWorkflow = false;
 let lastCatchTimestamp = 0;
 
@@ -1129,16 +1181,15 @@ async function captureAndDetectScreen() {
     const statusMsg = `ตรวจพบเสาพร้อมหมุน ${eligibleStops.length} จุด (${engine === "ai" ? "AI Model" : "Heuristic"})`;
     $("#screen-status-text").textContent = statusMsg;
 
-    // Auto-Catch starts only on an encounter; other screens never trigger input.
-    // STRICT: Never activate auto-catch on map screen — it conflicts with auto-spin
-    if (isAutoCatchEnabled() && !activeCatchWorkflow && !activeSpinWorkflow?.running && Date.now() - lastCatchTimestamp > 2500) {
+    // Auto-Catch and Auto-Click Pokémon both verify the screen before sending input.
+    if ((isAutoCatchEnabled() || isAutoPokemonEnabled()) && !activeCatchWorkflow && !activeSpinWorkflow?.running && Date.now() - lastCatchTimestamp > 2500) {
       try {
         const enc = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
 
         // *** MAP SCREEN GUARD — skip auto-catch entirely ***
         if (enc.is_map_screen) {
-          // Map screen — Auto-Catch must not send any input
-          // (no log spam — this is the normal state)
+          const clickedPokemon = await clickDetectedPokemon(serial, currentScreenBoxes);
+          if (clickedPokemon) return;
         } else if (enc.is_catch_summary) {
           await dismissCatchResult(serial, true);
           return;
@@ -1147,11 +1198,13 @@ async function captureAndDetectScreen() {
           setTimeout(() => runAutoCatchWorkflow(serial), 100);
           return;
         }
+
       } catch (_) {}
     }
 
     // Auto-Spin trigger
-    if (isAutoSpinEnabled() && !activeSpinWorkflow?.running && !activeCatchWorkflow && Date.now() - lastSpinTimestamp > 5000) {
+    const pokemonHasPriority = isAutoPokemonEnabled() && Boolean(chooseDetectedPokemon(currentScreenBoxes));
+    if (isAutoSpinEnabled() && !pokemonHasPriority && !activeSpinWorkflow?.running && !activeCatchWorkflow && Date.now() - lastSpinTimestamp > 5000) {
       const candidate = chooseCandidate(screenFrameBitmap, currentScreenBoxes);
       if (candidate) {
         appendSpinLog("auto-spin", "พบเสาพร้อมหมุนในระยะ — กำลังเริ่มหมุนอัตโนมัติ...");
@@ -1436,6 +1489,15 @@ $("#screen-auto-spin-chk")?.addEventListener("change", (e) => {
 $("#screen-auto-spin-toggle")?.addEventListener("change", (e) => {
   syncAutoSpinToggles(e.target.checked);
   toast(e.target.checked ? "⚡ เปิดโหมดหมุนเสาอัตโนมัติ (Auto-Spin)" : "ปิดโหมดหมุนเสาอัตโนมัติ");
+});
+
+$("#screen-auto-pokemon-chk")?.addEventListener("change", (e) => {
+  syncAutoPokemonToggles(e.target.checked);
+  toast(e.target.checked ? "🌟 เปิดคลิก Pokémon อัตโนมัติ" : "ปิดคลิก Pokémon อัตโนมัติ");
+});
+$("#screen-auto-pokemon-toggle")?.addEventListener("change", (e) => {
+  syncAutoPokemonToggles(e.target.checked);
+  toast(e.target.checked ? "🌟 เปิดคลิก Pokémon อัตโนมัติ" : "ปิดคลิก Pokémon อัตโนมัติ");
 });
 
 function handleAutoCatchToggle(checked) {
@@ -1804,10 +1866,11 @@ $("#ai-auto-label-btn")?.addEventListener("click", safe(async () => {
 $("#ai-start-train-btn")?.addEventListener("click", safe(async () => {
   const epochs = Number($("#ai-train-epochs").value) || 30;
   const imgsz = Number($("#ai-train-imgsz").value) || 640;
+  const label_source = $("#ai-train-label-source").value || "auto";
   const logBox = $("#ai-train-log");
   if (logBox) logBox.textContent = "กำลังเตรียมสภาพแวดล้อมและเริ่มเทรนโมเดล YOLOv8 บน Mac…\n";
-  await api("/api/ai/train/start", { epochs, imgsz });
-  toast(`🚀 เริ่มเทรน YOLOv8 (${epochs} epochs, ${imgsz}px) แล้ว…`);
+  await api("/api/ai/train/start", { epochs, imgsz, label_source });
+  toast(`🚀 เริ่มเทรน YOLOv8 ด้วย labels: ${label_source} (${epochs} epochs, ${imgsz}px) แล้ว…`);
   pollTrainStatus();
 }));
 

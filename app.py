@@ -10,6 +10,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from api.endpoints import router
+from annotation.api import router as annotation_router
+from annotation.api import init_service as init_annotation
+from annotation.database import AnnotationDatabase
+from annotation.service import AnnotationService
 from services.controller import Controller
 
 load_dotenv()
@@ -33,11 +37,20 @@ def create_app(provider: str | None = None, database: str | None = None) -> Fast
             raise ValueError("Invalid provider, movement frequency or default speed")
         c = Controller(mode, database or os.getenv("DATABASE_PATH", str(ROOT / "data/app.db")), hz, speed)
         app.state.controller = c
+
+        # Annotation editor
+        ann_db = AnnotationDatabase(str(ROOT / "data/annotation.db"))
+        ann_svc = AnnotationService(str(ROOT / "dataset"), ann_db)
+        init_annotation(ann_svc)
+        ann_svc.sync_images()
+        app.state.annotation_service = ann_svc
+
         try:
             await c.start()
             yield
         finally:
             await c.close()
+            ann_svc.close()
 
     app = FastAPI(title="Pokemon GO Controller", lifespan=lifespan)
     hosts = ["127.0.0.1", "localhost", "[::1]", "testserver"]
@@ -54,11 +67,15 @@ def create_app(provider: str | None = None, database: str | None = None) -> Fast
         ):
             return JSONResponse({"detail": "Cross-origin control is disabled"}, status_code=403)
         length = request.headers.get("content-length", "0")
-        if not length.isdigit() or int(length) > 2_100_000:
+        if not length.isdigit() or int(length) > 50_000_000:
             return JSONResponse({"detail": "Request too large"}, status_code=413)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if request.url.path.startswith("/annotation") or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
         logger.debug("HTTP %s %s -> %s", request.method, request.url.path, response.status_code)
         return response
 
@@ -74,7 +91,12 @@ def create_app(provider: str | None = None, database: str | None = None) -> Fast
     async def index():
         return FileResponse(ROOT / "static/index.html")
 
+    @app.get("/annotation")
+    async def annotation_page():
+        return FileResponse(ROOT / "static/annotation.html")
+
     app.include_router(router)
+    app.include_router(annotation_router)
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     return app
 

@@ -6,16 +6,11 @@ from pathlib import Path
 from typing import Any
 from PIL import Image
 import numpy as np
+from models.class_config import load_class_names
 
 logger = logging.getLogger(__name__)
 
-CLASS_NAMES = {
-    0: "pokestop_active",
-    1: "pokestop_cooldown",
-    2: "pokestop_distant",
-    3: "gym",
-    4: "pokemon",
-}
+CLASS_NAMES = load_class_names()
 
 
 class PokestopAIDetector:
@@ -153,7 +148,7 @@ class PokestopAIDetector:
 
             # Gym detection: model predicted gym (cid=3) or explicit oversized arena bounding box (>= 40000px on 900x1600 normalized)
             is_gym = (cid == 3) or (
-                cid not in (1, 2, 4) and (
+                cid not in (1, 2, 4, 5, 6) and (
                     bh >= int(220 * (orig_h / 1600.0)) or
                     (bw >= int(180 * (orig_w / 900.0)) and bh >= int(160 * (orig_h / 1600.0))) or
                     ((bw / orig_w) * (bh / orig_h) >= (40000.0 / (900.0 * 1600.0)))

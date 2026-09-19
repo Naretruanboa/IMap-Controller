@@ -9,7 +9,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.audit_dataset import CLASS_NAMES, audit
+from scripts.audit_dataset import audit
 
 
 def train_yolo(
@@ -25,6 +25,7 @@ def train_yolo(
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     if not report["ready_for_training"]:
         raise ValueError("Dataset is not ready:\n- " + "\n- ".join(report["blocking_issues"]))
+    class_names = report["classes"]
     if epochs < 1 or imgsz != 640:
         raise ValueError("Use epochs >= 1 and imgsz=640 (the installed detector expects 640×640 input).")
     from ultralytics import YOLO
@@ -47,11 +48,11 @@ def train_yolo(
     metrics = best.val(data=str(data_yaml.resolve()), split="val", imgsz=imgsz, device="cpu", workers=0)
     per_class = {
         name: {"precision": 0.0, "recall": 0.0, "map50": 0.0, "map50_95": 0.0}
-        for name in CLASS_NAMES.values()
+        for name in class_names.values()
     }
     for index, cid in enumerate(metrics.box.ap_class_index):
         precision, recall, ap50, ap = metrics.box.class_result(index)
-        per_class[CLASS_NAMES[int(cid)]] = dict(
+        per_class[class_names[int(cid)]] = dict(
             zip(["precision", "recall", "map50", "map50_95"], map(float, [precision, recall, ap50, ap]))
         )
     passed = all(

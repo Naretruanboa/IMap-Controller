@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pokémon GO Annotation Editor</title>
+    <meta name="description" content="Web-based image annotation editor for Pokémon GO object detection dataset">
+    <link rel="stylesheet" href="/static/css/annotation.css?v=4.0">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="app" class="ann-app">
+    <!-- ═══ Header ═══ -->
+    <header class="ann-header">
+        <div class="ann-header__brand">
+            <span class="ann-header__icon">🏷️</span>
+            <h1 class="ann-header__title">Pokémon GO Annotation</h1>
+        </div>
+        <div class="ann-header__stats" id="headerStats"></div>
+        <div class="ann-header__actions">
+            <input type="file" id="fileUploadInput" multiple accept="image/png,image/jpeg,image/jpg,image/webp" style="display:none">
+            <button class="ann-btn ann-btn--primary" id="btnUpload" title="Upload new images (PNG, JPG, WebP)">➕ Upload Images</button>
+            <button class="ann-btn ann-btn--ghost" id="btnSync" title="Scan for new images">🔄 Sync</button>
+            <button class="ann-btn ann-btn--ghost" id="btnExport" title="Export dataset">📦 Export</button>
+        </div>
+    </header>
+
+    <!-- ═══ Body ═══ -->
+    <div class="ann-body">
+        <!-- Left Panel: Image List -->
+        <aside class="ann-panel ann-panel--left" id="panelLeft">
+            <div class="ann-panel__head">
+                <h2>Images</h2>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span class="ann-badge" id="imageCount">0</span>
+                    <button class="ann-btn ann-btn--ghost ann-btn--sm" id="btnSelectMode" title="Toggle selection mode for batch delete">☑ Select</button>
+                    <button class="ann-btn ann-btn--ghost ann-btn--sm" id="btnQuickUpload" title="Upload new images">+ Upload</button>
+                </div>
+            </div>
+            <div class="ann-filters">
+                <select id="filterStatus" class="ann-select">
+                    <option value="all">All Status</option>
+                    <option value="pending">⚪ Pending</option>
+                    <option value="draft">🟡 Draft</option>
+                    <option value="completed">🟢 Completed</option>
+                    <option value="no_object">🔵 No Object</option>
+                    <option value="skipped">🔴 Skipped</option>
+                </select>
+                <select id="filterClass" class="ann-select">
+                    <option value="">All Classes</option>
+                </select>
+                <input type="text" id="searchInput" class="ann-input" placeholder="🔍 Search...">
+            </div>
+            <div class="ann-image-list" id="imageList">
+                <div class="ann-empty">Click <b>🔄 Sync</b> or <b>➕ Upload</b> to add images</div>
+            </div>
+            <div class="ann-batch-bar" id="batchBar" style="display:none">
+                <label class="ann-batch-bar__select-all">
+                    <input type="checkbox" id="selectAllCheckbox"> All
+                </label>
+                <span class="ann-batch-bar__info" id="selectedCountText">Select images</span>
+                <button class="ann-btn ann-btn--danger ann-btn--sm" id="btnBatchDelete" disabled>🗑 Delete Selected</button>
+            </div>
+            <div class="ann-pagination" id="pagination"></div>
+        </aside>
+
+        <!-- Center: Canvas -->
+        <main class="ann-main">
+            <div class="ann-toolbar">
+                <span class="ann-toolbar__info" id="imageInfo">No image selected</span>
+                <span class="ann-toolbar__zoom" id="zoomInfo">100%</span>
+                <button class="ann-btn ann-btn--icon" id="btnZoomIn" title="Zoom in (+)">+</button>
+                <button class="ann-btn ann-btn--icon" id="btnZoomOut" title="Zoom out (-)">−</button>
+                <button class="ann-btn ann-btn--icon" id="btnZoomReset" title="Reset zoom (0)">⊙</button>
+            </div>
+            <div class="ann-canvas" id="canvasContainer">
+                <div class="ann-canvas__placeholder" id="canvasPlaceholder">
+                    <div class="ann-canvas__placeholder-icon">🖼️</div>
+                    <div>Select an image or drag & drop files here</div>
+                    <div class="ann-canvas__placeholder-hint">or click <b>➕ Upload Images</b> to add new images</div>
+                </div>
+            </div>
+            <div class="ann-actions">
+                <div class="ann-actions__group">
+                    <button class="ann-btn" id="btnPrev" title="Previous (A)">◀ Prev</button>
+                    <button class="ann-btn" id="btnNext" title="Next (D)">Next ▶</button>
+                </div>
+                <div class="ann-actions__group">
+                    <button class="ann-btn ann-btn--primary" id="btnSave" title="Save Draft (S)">💾 Save</button>
+                    <button class="ann-btn ann-btn--success" id="btnComplete" title="Complete (Enter)">✅ Complete</button>
+                    <button class="ann-btn ann-btn--info" id="btnNoObject" title="No Object">📭 No Object</button>
+                    <button class="ann-btn ann-btn--warning" id="btnSkip" title="Skip">⏭ Skip</button>
+                    <button class="ann-btn ann-btn--ghost" id="btnReopen" title="Reopen" style="display:none">🔄 Reopen</button>
+                    <button class="ann-btn ann-btn--danger" id="btnDeleteImage" title="Delete current image & labels">🗑 Delete</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Panel: Classes + Summary -->
+        <aside class="ann-panel ann-panel--right">
+            <div class="ann-section">
+                <div class="ann-section__head">
+                    <h2>Active Class</h2>
+                </div>
+                <div class="ann-class-list" id="classList"></div>
+                <button class="ann-btn ann-btn--ghost ann-btn--full" id="btnAddClass">+ Add Class</button>
+            </div>
+            <div class="ann-section">
+                <h2>Object Summary</h2>
+                <div id="objectSummary" class="ann-summary">
+                    <div class="ann-empty">No objects</div>
+                </div>
+            </div>
+            <div class="ann-section">
+                <h2>Bounding Boxes</h2>
+                <div id="bboxList" class="ann-bbox-list">
+                    <div class="ann-empty">No bounding boxes</div>
+                </div>
+            </div>
+            <div class="ann-section ann-section--shortcuts">
+                <h2>Shortcuts</h2>
+                <div class="ann-shortcuts">
+                    <div><kbd>1</kbd>–<kbd>9</kbd> Select class</div>
+                    <div><kbd>A</kbd> Previous image</div>
+                    <div><kbd>D</kbd> Next image</div>
+                    <div><kbd>S</kbd> Save draft</div>
+                    <div><kbd>Enter</kbd> Complete</div>
+                    <div><kbd>Del</kbd> Delete bbox</div>
+                    <div><kbd>Esc</kbd> Deselect / Cancel</div>
+                    <div><kbd>Space</kbd>+drag Pan</div>
+                    <div><kbd>Scroll</kbd> Zoom</div>
+                    <div><kbd>0</kbd> Reset zoom</div>
+                </div>
+            </div>
+        </aside>
+    </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toastContainer" class="ann-toast-container"></div>
+
+<!-- Export Dialog -->
+<dialog id="exportDialog" class="ann-dialog">
+    <h3>Export Dataset</h3>
+    <div class="ann-dialog__body">
+        <label>Train Ratio <input type="number" id="exportTrain" value="0.8" step="0.05" min="0" max="1" class="ann-input"></label>
+        <label>Val Ratio <input type="number" id="exportVal" value="0.1" step="0.05" min="0" max="1" class="ann-input"></label>
+        <label>Test Ratio <input type="number" id="exportTest" value="0.1" step="0.05" min="0" max="1" class="ann-input"></label>
+        <label>Random Seed <input type="number" id="exportSeed" value="42" class="ann-input"></label>
+    </div>
+    <div class="ann-dialog__footer">
+        <button class="ann-btn ann-btn--ghost" onclick="document.getElementById('exportDialog').close()">Cancel</button>
+        <button class="ann-btn ann-btn--success" id="btnExportConfirm">Export</button>
+    </div>
+</dialog>
+
+<!-- Add Class Dialog -->
+<dialog id="addClassDialog" class="ann-dialog">
+    <h3>Add New Class</h3>
+    <div class="ann-dialog__body">
+        <label>Class Name <input type="text" id="newClassName" class="ann-input" placeholder="e.g. pokestop_sponsored"></label>
+    </div>
+    <div class="ann-dialog__footer">
+        <button class="ann-btn ann-btn--ghost" onclick="document.getElementById('addClassDialog').close()">Cancel</button>
+        <button class="ann-btn ann-btn--success" id="btnAddClassConfirm">Add</button>
+    </div>
+</dialog>
+
+<script src="https://unpkg.com/konva@9/konva.min.js"></script>
+<script src="/static/js/annotation-canvas.js?v=4.0"></script>
+<script src="/static/js/annotation-app.js?v=4.0"></script>
+</body>
+</html>

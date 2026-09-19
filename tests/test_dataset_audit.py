@@ -13,7 +13,7 @@ def make_dataset(root: Path, shared=False, missing_gym=False):
         (root / "images" / split).mkdir(parents=True)
         (root / "labels" / split).mkdir(parents=True)
         Image.new("RGB", (20, 20), color).save(root / "images" / split / "example.png")
-        ids = range(len(CLASS_NAMES) - 2) if missing_gym else range(len(CLASS_NAMES))
+        ids = [cid for cid in CLASS_NAMES if not (missing_gym and CLASS_NAMES[cid] == "gym")]
         (root / "labels" / split / "example.txt").write_text("".join(f"{cid} .5 .5 .2 .2\n" for cid in ids))
     config = root / "data.yaml"
     config.write_text(
