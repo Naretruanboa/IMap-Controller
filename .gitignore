@@ -25,6 +25,7 @@ data/
 *.db
 *.sqlite
 *.sqlite3
+!models/model_registry.db
 *.log
 
 # Build and packaging artifacts
