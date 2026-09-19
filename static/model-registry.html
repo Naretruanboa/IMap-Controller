@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Model Registry · Pokemon GO Controller</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101814; --panel:#18251e; --line:#314238; --text:#e8f2eb; --muted:#9caf9f; --accent:#6ee7b7; }
+    * { box-sizing:border-box; } body { margin:0; background:linear-gradient(135deg,#0d1511,#1b3025); color:var(--text); font:15px system-ui,sans-serif; }
+    main { max-width:1180px; margin:auto; padding:28px 20px 60px; } h1 { margin:0 0 6px; } h2 { margin:0; font-size:16px; } p { color:var(--muted); } .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin:20px 0; }
+    button { border:1px solid var(--line); border-radius:7px; padding:9px 13px; background:#22352a; color:var(--text); cursor:pointer; } button:hover { border-color:var(--accent); } button:disabled { opacity:.5; cursor:default; }
+    .grid { display:grid; grid-template-columns:1.4fr .9fr; gap:16px; } .panel { background:rgba(24,37,30,.94); border:1px solid var(--line); border-radius:10px; padding:16px; }
+    .model { border:1px solid var(--line); border-radius:8px; padding:13px; margin-top:9px; display:flex; justify-content:space-between; gap:16px; align-items:center; } .model.active { border-color:var(--accent); } .model small,.muted { color:var(--muted); }
+    .actions { display:flex; gap:6px; flex-shrink:0; } .badge { color:#092016; background:var(--accent); padding:3px 7px; border-radius:10px; font-size:11px; font-weight:700; } table { width:100%; border-collapse:collapse; margin-top:10px; } th,td { text-align:left; border-bottom:1px solid var(--line); padding:8px 5px; font-size:13px; } th { color:var(--muted); }
+    .score { color:var(--accent); font-weight:700; } pre { white-space:pre-wrap; color:var(--muted); font-size:12px; } @media(max-width:800px){.grid{grid-template-columns:1fr}.model{align-items:flex-start;flex-direction:column}.actions{width:100%}}
+  </style>
+</head>
+<body><main>
+  <a href="/" style="color:var(--accent)">← กลับ Controller</a>
+  <h1>Model Registry</h1><p>รายการโมเดลจาก SQLite พร้อมสถานะ Active ประวัติการเลือกใช้ และการเปรียบเทียบประสิทธิภาพ</p>
+  <div class="toolbar"><button id="refresh">รีเฟรช</button><span id="status" class="muted"></span></div>
+  <div class="grid"><section class="panel"><h2>Model versions</h2><div id="models">กำลังโหลด...</div></section><section class="panel"><h2>เปรียบเทียบศักยภาพ</h2><div id="comparison">กำลังโหลด...</div><hr><h2>รายละเอียด</h2><div id="details" class="muted">เลือกโมเดลเพื่อดูรายละเอียด</div></section></div>
+</main><script>
+const $=s=>document.querySelector(s); async function api(path,opts={}){const r=await fetch('/api/ai'+path,opts); const d=await r.json(); if(!r.ok) throw Error(d.detail||'Request failed'); return d;}
+function score(v){return v==null?'—':(v*100).toFixed(1)+'%';}
+async function load(){try{const [registry,comparison]=await Promise.all([api('/models'),api('/models/compare')]); $('#status').textContent=`SQLite · ${registry.models.length} versions · Active: ${registry.active_id||'none'}`; $('#models').replaceChildren(...registry.models.map(m=>{const el=document.createElement('div');el.className='model '+(m.id===registry.active_id?'active':'');el.innerHTML=`<div><strong>${m.version}</strong> ${m.id===registry.active_id?'<span class=badge>ACTIVE</span>':''}<br><small>${m.created_at} · ${m.label_source} · ${m.epochs??'—'} epochs · ${(m.size_bytes/1048576).toFixed(1)} MB</small></div>`;const a=document.createElement('div');a.className='actions';const view=document.createElement('button');view.textContent='รายละเอียด';view.onclick=()=>detail(m.id);const use=document.createElement('button');use.textContent=m.id===registry.active_id?'ใช้งานอยู่':'เลือกใช้';use.disabled=m.id===registry.active_id;use.onclick=async()=>{await api('/models/'+encodeURIComponent(m.id)+'/use',{method:'POST'});load();};const del=document.createElement('button');del.textContent='ลบ';del.disabled=m.id===registry.active_id;del.onclick=async()=>{if(confirm('ลบ '+m.version+'?')){await api('/models/'+encodeURIComponent(m.id),{method:'DELETE'});load();}};a.append(view,use,del);el.append(a);return el;})); $('#comparison').innerHTML='<table><tr><th>Version</th><th>mAP50</th><th>Precision</th><th>Recall</th></tr>'+comparison.models.map(m=>`<tr><td>${m.version}</td><td class=score>${score(m.mean_map50)}</td><td>${score(m.mean_precision)}</td><td>${score(m.mean_recall)}</td></tr>`).join('')+'</table>'; }catch(e){$('#status').textContent=e.message;}}
+async function detail(id){const m=await api('/models/'+encodeURIComponent(id));const c=m.metrics?.classes||{};$('#details').innerHTML=`<p><strong>${m.version}</strong><br>${m.created_at}<br>source: ${m.label_source}<br>path: ${m.path}</p><table><tr><th>Class</th><th>P</th><th>R</th><th>mAP50</th></tr>${Object.entries(c).map(([n,v])=>`<tr><td>${n}</td><td>${score(v.precision)}</td><td>${score(v.recall)}</td><td>${score(v.map50)}</td></tr>`).join('')}</table><p>ประวัติการเลือกใช้: ${(m.usage_history||[]).map(x=>x.selected_at+' '+x.action).join('<br>')||'ไม่มี'}</p>`;}
+$('#refresh').onclick=load;load();
+</script></body></html>

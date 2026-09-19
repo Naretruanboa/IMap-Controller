@@ -818,12 +818,49 @@ async def get_train_status():
 
 @router.get("/api/ai/model/status")
 async def get_model_status():
+    registry = default_training_service.list_models()
     return {
         "ready": default_ai_detector.is_ai_ready,
         "model_path": str(default_ai_detector.model_path),
         "exists": default_ai_detector.model_path.exists(),
-        "input_shape": default_ai_detector.input_shape
+        "input_shape": default_ai_detector.input_shape,
+        "active_id": registry["active_id"],
+        "models": registry["models"],
     }
+
+
+@router.get("/api/ai/models")
+async def list_models():
+    return default_training_service.list_models()
+
+
+@router.get("/api/ai/models/compare")
+async def compare_models():
+    return default_training_service.compare_models()
+
+
+@router.get("/api/ai/models/{model_id}")
+async def model_detail(model_id: str):
+    try:
+        return default_training_service.get_model_detail(model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/api/ai/models/{model_id}/use")
+async def use_model(model_id: str):
+    try:
+        return {"ok": True, "model": default_training_service.use_model(model_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/api/ai/models/{model_id}")
+async def delete_model(model_id: str):
+    try:
+        return {"ok": True, **default_training_service.delete_model(model_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 

@@ -5,11 +5,14 @@ import io
 import json
 import logging
 import os
+import re
+import sqlite3
 import shutil
 import subprocess
 import sys
 import threading
 import time
+from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -32,6 +35,7 @@ class AITrainingService:
         self.images_dir = self.dataset_dir / "images"
         self.labels_dir = self.dataset_dir / "labels"
         self.models_dir = self.base_dir / "models"
+        self.registry_db_path = self.models_dir / "model_registry.db"
         
         # State tracking
         self.collection_task: asyncio.Task | None = None
@@ -55,6 +59,175 @@ class AITrainingService:
         }
         self.log_buffer: list[str] = []
         self._log_lock = threading.Lock()
+
+        self._init_model_registry()
+        self._load_active_model()
+
+    def _init_model_registry(self) -> None:
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.registry_db_path) as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS models (
+                    id TEXT PRIMARY KEY,
+                    version TEXT NOT NULL,
+                    path TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    label_source TEXT NOT NULL,
+                    epochs INTEGER,
+                    imgsz INTEGER,
+                    size_bytes INTEGER NOT NULL,
+                    metrics_json TEXT NOT NULL DEFAULT '{}',
+                    created_by TEXT NOT NULL DEFAULT 'training'
+                );
+                CREATE TABLE IF NOT EXISTS model_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+                    selected_at TEXT NOT NULL,
+                    action TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS registry_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+            """)
+            count = conn.execute("SELECT COUNT(*) FROM models").fetchone()[0]
+            legacy_registry_path = self.models_dir / "registry.json"
+            if count == 0 and legacy_registry_path.exists():
+                try:
+                    legacy = json.loads(legacy_registry_path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    legacy = {"active_id": None, "models": []}
+                for item in legacy.get("models", []):
+                    conn.execute(
+                        """INSERT OR IGNORE INTO models
+                           (id, version, path, created_at, label_source, epochs, imgsz, size_bytes, metrics_json, created_by)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (item["id"], item.get("version", item["id"]), item["path"], item["created_at"],
+                         item.get("label_source", "legacy"), item.get("epochs"), item.get("imgsz"),
+                         item.get("size_bytes", 0), json.dumps(item.get("metrics", {})), "json-migration"),
+                    )
+                if legacy.get("active_id"):
+                    conn.execute("INSERT OR REPLACE INTO registry_state(key, value) VALUES ('active_id', ?)", (legacy["active_id"],))
+            legacy_path = self.models_dir / "pokestop_yolov8n.onnx"
+            existing = conn.execute("SELECT 1 FROM models WHERE path = ?", (str(legacy_path.resolve()),)).fetchone()
+            if legacy_path.is_file() and not existing:
+                conn.execute(
+                    """INSERT INTO models (id, version, path, created_at, label_source, imgsz, size_bytes, created_by)
+                       VALUES (?, ?, ?, ?, 'legacy', 640, ?, 'legacy-migration')""",
+                    ("legacy-yolov8n", "legacy-yolov8n", str(legacy_path.resolve()),
+                     datetime.fromtimestamp(legacy_path.stat().st_mtime).isoformat(timespec="seconds"), legacy_path.stat().st_size),
+                )
+                active = conn.execute("SELECT value FROM registry_state WHERE key = 'active_id'").fetchone()
+                if not active:
+                    conn.execute("INSERT INTO registry_state(key, value) VALUES ('active_id', 'legacy-yolov8n')")
+
+    @staticmethod
+    def _row_to_model(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["metrics"] = json.loads(item.pop("metrics_json") or "{}")
+        return item
+
+    def _load_active_model(self) -> None:
+        with sqlite3.connect(self.registry_db_path) as conn:
+            row = conn.execute(
+                "SELECT path FROM models WHERE id = (SELECT value FROM registry_state WHERE key = 'active_id')"
+            ).fetchone()
+        if row and Path(row[0]).is_file():
+            default_ai_detector.model_path = Path(row[0])
+            default_ai_detector._load_model()
+
+    def list_models(self) -> dict[str, Any]:
+        with sqlite3.connect(self.registry_db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM models ORDER BY created_at DESC").fetchall()
+            models = [self._row_to_model(row) for row in rows if Path(row["path"]).is_file()]
+            active = conn.execute("SELECT value FROM registry_state WHERE key = 'active_id'").fetchone()
+        return {"active_id": active[0] if active else None, "models": models}
+
+    def get_model_detail(self, model_id: str) -> dict[str, Any]:
+        with sqlite3.connect(self.registry_db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM models WHERE id = ?", (model_id,)).fetchone()
+            if not row:
+                raise ValueError("Model version not found")
+            model = self._row_to_model(row)
+            model["usage_history"] = [dict(item) for item in conn.execute(
+                "SELECT selected_at, action FROM model_usage WHERE model_id = ? ORDER BY selected_at DESC", (model_id,)
+            ).fetchall()]
+        return model
+
+    def compare_models(self) -> dict[str, Any]:
+        models = self.list_models()["models"]
+        comparison = []
+        for model in models:
+            classes = model.get("metrics", {}).get("classes", {})
+            values = [item.get("map50", 0.0) for item in classes.values()]
+            comparison.append({
+                "id": model["id"],
+                "version": model["version"],
+                "created_at": model["created_at"],
+                "label_source": model["label_source"],
+                "mean_map50": round(sum(values) / len(values), 4) if values else None,
+                "mean_precision": round(sum(item.get("precision", 0.0) for item in classes.values()) / len(classes), 4) if classes else None,
+                "mean_recall": round(sum(item.get("recall", 0.0) for item in classes.values()) / len(classes), 4) if classes else None,
+                "classes": classes,
+            })
+        return {"active_id": self.list_models()["active_id"], "models": comparison}
+
+    def register_model(self, source_path: Path, label_source: str, epochs: int, imgsz: int, metrics: dict[str, Any] | None = None) -> dict[str, Any]:
+        now = datetime.now()
+        model_id = f"v{now.strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}"
+        version_path = self.models_dir / f"pokestop_yolov8n-{model_id}.onnx"
+        shutil.copyfile(source_path, version_path)
+        metadata = {
+            "id": model_id,
+            "version": model_id,
+            "path": str(version_path.resolve()),
+            "created_at": now.isoformat(timespec="seconds"),
+            "label_source": label_source,
+            "epochs": epochs,
+            "imgsz": imgsz,
+            "size_bytes": version_path.stat().st_size,
+            "metrics": metrics or {},
+        }
+        with sqlite3.connect(self.registry_db_path) as conn:
+            conn.execute("""INSERT INTO models
+                (id, version, path, created_at, label_source, epochs, imgsz, size_bytes, metrics_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (metadata["id"], metadata["version"], metadata["path"], metadata["created_at"], label_source,
+                 epochs, imgsz, metadata["size_bytes"], json.dumps(metadata["metrics"])))
+            self._activate_in_connection(conn, model_id)
+        return metadata
+
+    def _activate_in_connection(self, conn: sqlite3.Connection, model_id: str) -> None:
+        selected_at = datetime.now().isoformat(timespec="seconds")
+        conn.execute("INSERT OR REPLACE INTO registry_state(key, value) VALUES ('active_id', ?)", (model_id,))
+        conn.execute("INSERT INTO model_usage(model_id, selected_at, action) VALUES (?, ?, 'activate')", (model_id, selected_at))
+
+    def use_model(self, model_id: str) -> dict[str, Any]:
+        with sqlite3.connect(self.registry_db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM models WHERE id = ?", (model_id,)).fetchone()
+            model = self._row_to_model(row) if row else None
+        if not model or not Path(model["path"]).is_file():
+            raise ValueError("Model version not found")
+        default_ai_detector.model_path = Path(model["path"])
+        default_ai_detector._load_model()
+        with sqlite3.connect(self.registry_db_path) as conn:
+            self._activate_in_connection(conn, model_id)
+        return model
+
+    def delete_model(self, model_id: str) -> dict[str, Any]:
+        registry = self.list_models()
+        if registry.get("active_id") == model_id:
+            raise ValueError("Cannot delete the active model; select another version first")
+        model = next((item for item in registry["models"] if item["id"] == model_id), None)
+        if not model:
+            raise ValueError("Model version not found")
+        Path(model["path"]).unlink(missing_ok=True)
+        with sqlite3.connect(self.registry_db_path) as conn:
+            conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
+        return {"deleted": model_id}
 
     def get_dataset_stats(self) -> dict[str, Any]:
         """Return counts of images, labels, and class distribution."""
@@ -353,11 +526,15 @@ names:
             )
 
             # Stream stdout line by line
+            metrics_path: Path | None = None
             if self.training_process.stdout:
                 for line in iter(self.training_process.stdout.readline, ""):
                     if not line:
                         break
                     self._append_log(line)
+                    metrics_match = re.search(r"Metrics:\s+(.+)", line)
+                    if metrics_match:
+                        metrics_path = Path(metrics_match.group(1).strip())
                     if "Epoch " in line or "epoch " in line:
                         self.training_status["stage"] = "training"
 
@@ -365,12 +542,20 @@ names:
             ret = self.training_process.returncode
 
             if ret == 0 and target_onnx.exists():
+                metrics = {}
+                if metrics_path and metrics_path.is_file():
+                    try:
+                        metrics = json.loads(metrics_path.read_text())
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                model_metadata = self.register_model(target_onnx, self.training_status["label_source"], epochs, imgsz, metrics)
                 self.training_status["stage"] = "completed"
                 self.training_status["progress"] = 100
+                self.training_status["model_id"] = model_metadata["id"]
                 self._append_log(f"\n[SUCCESS] Training finished! Reloading AI detector from {target_onnx.name}...\n")
                 
                 # Reload detector
-                default_ai_detector.model_path = target_onnx
+                default_ai_detector.model_path = Path(model_metadata["path"])
                 default_ai_detector._load_model()
                 self._append_log("Active AI detector successfully reloaded with new model weights!\n")
             elif self.training_status["stage"] == "stopped":

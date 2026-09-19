@@ -1485,6 +1485,33 @@ footer .footer-note {
   word-break: break-all;
 }
 
+.model-version-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.model-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--border, #33443a);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.model-version-row small {
+  color: var(--muted, #9aa99f);
+}
+
+.model-version-row > div:last-child {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .screen-overlay-log {
   background: rgba(18, 26, 21, 0.90);
   color: #6ee7b7;

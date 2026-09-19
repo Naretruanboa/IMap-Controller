@@ -95,6 +95,10 @@ def create_app(provider: str | None = None, database: str | None = None) -> Fast
     async def annotation_page():
         return FileResponse(ROOT / "static/annotation.html")
 
+    @app.get("/models")
+    async def model_registry_page():
+        return FileResponse(ROOT / "static/model-registry.html")
+
     app.include_router(router)
     app.include_router(annotation_router)
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")

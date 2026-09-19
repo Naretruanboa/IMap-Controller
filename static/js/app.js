@@ -1827,9 +1827,49 @@ async function refreshModelStatus() {
       badge.className = "badge badge-warning";
       pathText.textContent = "ยังไม่มีโมเดล ONNX ที่โหลด — ระบบใช้ Heuristic ตรวจจับอัตโนมัติ";
     }
+    renderModelVersions(data.models || [], data.active_id);
   } catch (err) {
     console.warn("Model status error:", err);
   }
+}
+
+function renderModelVersions(models, activeId) {
+  const container = $("#ai-model-versions");
+  if (!container) return;
+  if (!models.length) {
+    container.textContent = "ยังไม่มี model version ที่บันทึกไว้จากการ Training รอบใหม่";
+    return;
+  }
+  container.replaceChildren(...models.map((model) => {
+    const row = document.createElement("div");
+    row.className = "model-version-row";
+    const info = document.createElement("div");
+    const metric = model.metrics?.classes ? ` · P ${(Object.values(model.metrics.classes).reduce((sum, item) => sum + item.precision, 0) / Object.keys(model.metrics.classes).length * 100).toFixed(1)}%` : "";
+    info.innerHTML = `<strong>${model.version}</strong> ${model.id === activeId ? "<span class=\"badge badge-success\">ACTIVE</span>" : ""}<br><small>${model.created_at} · ${model.label_source} · ${model.epochs} epochs · ${(model.size_bytes / 1048576).toFixed(1)} MB${metric}</small>`;
+    const actions = document.createElement("div");
+    const useButton = document.createElement("button");
+    useButton.className = "quiet";
+    useButton.textContent = model.id === activeId ? "ใช้งานอยู่" : "เลือกใช้";
+    useButton.disabled = model.id === activeId;
+    useButton.onclick = safe(async () => {
+      await api(`/api/ai/models/${encodeURIComponent(model.id)}/use`, { method: "POST" });
+      toast(`ใช้โมเดล ${model.version} แล้ว`);
+      await refreshModelStatus();
+    });
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "quiet";
+    deleteButton.textContent = "ลบ";
+    deleteButton.disabled = model.id === activeId;
+    deleteButton.onclick = safe(async () => {
+      if (!confirm(`ลบโมเดล ${model.version}?`)) return;
+      await api(`/api/ai/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
+      toast(`ลบโมเดล ${model.version} แล้ว`);
+      await refreshModelStatus();
+    });
+    actions.append(useButton, deleteButton);
+    row.append(info, actions);
+    return row;
+  }));
 }
 
 async function pollTrainStatus() {
