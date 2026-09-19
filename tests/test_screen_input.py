@@ -1,4 +1,5 @@
 import struct
+import time
 
 import pytest
 from pydantic import ValidationError
@@ -291,6 +292,65 @@ async def test_dismiss_detail_taps_checkmark(monkeypatch):
     taps = [args for args in calls if "input" in args]
     assert len(taps) == 1
     assert taps[0][-2:] == ("412", "1344")
+
+
+async def test_dismiss_pokestop_never_taps_main_map(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"map"
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: True)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.dismiss_pokestop(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is False
+    assert result["reason"] == "not_pokestop_screen"
+    assert not any("input" in args for args in calls)
+
+
+async def test_dismiss_pokestop_allows_confirmed_spin_screen(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"spin"
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: True)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+    endpoints._pokestop_screen_seen_at["emulator"] = time.monotonic() - 8
+
+    result = await endpoints.dismiss_pokestop(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is True
+    assert result["action"] == "pokestop_close"
+    assert any("input" in args for args in calls)
 
 
 async def test_dismiss_catch_summary_taps_ok(monkeypatch):

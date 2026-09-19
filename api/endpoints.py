@@ -34,6 +34,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 VERSION = "2.8.0"
+_pokestop_screen_seen_at: dict[str, float] = {}
 
 
 @router.get("/api/version")
@@ -286,6 +287,111 @@ class DismissCatchRequest(BaseModel):
     serial: str = Field(min_length=1, max_length=200)
 
 
+def _is_pokestop_spin_screen(png_bytes: bytes) -> bool:
+    """Detect the PokéStop photo-disc screen without confusing the map or encounter screen."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    height, width = img.shape[:2]
+
+    # The spin page has a large photo disc and a cyan/white close button at the
+    # bottom. Some game themes show a pink instruction pill and some do not.
+    photo = img[int(height * 0.25):int(height * 0.70), int(width * 0.10):int(width * 0.90)]
+    photo_std = float(np.std(cv2.cvtColor(photo, cv2.COLOR_BGR2GRAY)))
+
+    prompt = img[int(height * 0.78):int(height * 0.90), int(width * 0.12):int(width * 0.88)]
+    prompt_hsv = cv2.cvtColor(prompt, cv2.COLOR_BGR2HSV)
+    pink_mask = cv2.inRange(prompt_hsv, np.array([145, 70, 100]), np.array([179, 255, 255]))
+    pink_ratio = cv2.countNonZero(pink_mask) / max(prompt.shape[0] * prompt.shape[1], 1)
+
+    close = img[int(height * 0.88):int(height * 0.99), int(width * 0.36):int(width * 0.64)]
+    close_hsv = cv2.cvtColor(close, cv2.COLOR_BGR2HSV)
+    cyan_mask = cv2.inRange(close_hsv, np.array([75, 45, 100]), np.array([105, 255, 255]))
+    light_mask = cv2.inRange(close_hsv, np.array([0, 0, 180]), np.array([180, 80, 255]))
+    close_ratio = cv2.countNonZero(cyan_mask | light_mask) / max(close.shape[0] * close.shape[1], 1)
+    close_core = img[int(height * 0.90):int(height * 0.965), int(width * 0.44):int(width * 0.56)]
+    close_core_hsv = cv2.cvtColor(close_core, cv2.COLOR_BGR2HSV)
+    close_core_light = cv2.countNonZero(cv2.inRange(
+        close_core_hsv, np.array([0, 0, 180]), np.array([180, 100, 255])
+    )) / max(close_core.shape[0] * close_core.shape[1], 1)
+
+    purple_background = img[int(height * 0.04):int(height * 0.25), :]
+    purple_hsv = cv2.cvtColor(purple_background, cv2.COLOR_BGR2HSV)
+    purple_mask = cv2.inRange(purple_hsv, np.array([130, 45, 80]), np.array([179, 255, 255]))
+    purple_ratio = cv2.countNonZero(purple_mask) / max(purple_background.shape[0] * purple_background.shape[1], 1)
+
+    has_close_button = close_ratio > 0.12 or close_core_light > 0.20
+
+    # Stable controls shared by the different game themes: the white action
+    # pill with '+' above the disc and the circular '>' button at top-right.
+    action_pill = img[int(height * 0.20):int(height * 0.35), int(width * 0.32):int(width * 0.68)]
+    action_hsv = cv2.cvtColor(action_pill, cv2.COLOR_BGR2HSV)
+    action_light = cv2.countNonZero(cv2.inRange(
+        action_hsv, np.array([0, 0, 170]), np.array([180, 120, 255])
+    )) / max(action_pill.shape[0] * action_pill.shape[1], 1)
+    action_cyan = cv2.countNonZero(cv2.inRange(
+        action_hsv, np.array([75, 35, 80]), np.array([110, 255, 255])
+    )) / max(action_pill.shape[0] * action_pill.shape[1], 1)
+
+    next_button = img[int(height * 0.06):int(height * 0.19), int(width * 0.80):int(width * 0.98)]
+    next_hsv = cv2.cvtColor(next_button, cv2.COLOR_BGR2HSV)
+    next_light = cv2.countNonZero(cv2.inRange(
+        next_hsv, np.array([0, 0, 170]), np.array([180, 120, 255])
+    )) / max(next_button.shape[0] * next_button.shape[1], 1)
+    next_cyan = cv2.countNonZero(cv2.inRange(
+        next_hsv, np.array([75, 35, 80]), np.array([110, 255, 255])
+    )) / max(next_button.shape[0] * next_button.shape[1], 1)
+    action_edges = cv2.Canny(cv2.cvtColor(action_pill, cv2.COLOR_BGR2GRAY), 60, 160)
+    next_edges = cv2.Canny(cv2.cvtColor(next_button, cv2.COLOR_BGR2GRAY), 60, 160)
+
+    title = img[int(height * 0.07):int(height * 0.22), int(width * 0.03):int(width * 0.70)]
+    title_hsv = cv2.cvtColor(title, cv2.COLOR_BGR2HSV)
+    title_light = cv2.inRange(title_hsv, np.array([0, 0, 190]), np.array([180, 100, 255]))
+    title_edges = cv2.Canny(cv2.cvtColor(title, cv2.COLOR_BGR2GRAY), 80, 180)
+    title_signature = (
+        cv2.countNonZero(title_light) / max(title.shape[0] * title.shape[1], 1) > 0.012
+        and cv2.countNonZero(title_edges) / max(title.shape[0] * title.shape[1], 1) > 0.015
+    )
+
+    next_signature = next_light > 0.10 and cv2.countNonZero(next_edges) / max(next_button.shape[0] * next_button.shape[1], 1) > 0.01
+    plus_signature = action_light > 0.45 or (
+        action_light > 0.18
+        and cv2.countNonZero(action_edges) / max(action_pill.shape[0] * action_pill.shape[1], 1) > 0.005
+    )
+    # A real PokéStop page always has the top-right next arrow and either the
+    # central '+' action pill or a landmark title in the upper-left. Colors
+    # alone are deliberately insufficient because the map contains both.
+    controls_signature = next_signature and (plus_signature or title_signature)
+    return photo_std > 28.0 and has_close_button and controls_signature
+
+
+def _is_main_map_hud(png_bytes: bytes) -> bool:
+    """Detect the main map HUD so recovery can never tap the map screen."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    height, width = img.shape[:2]
+
+    portrait = img[int(height * 0.82):int(height * 0.97), :int(width * 0.24)]
+    portrait_edges = cv2.Canny(cv2.cvtColor(portrait, cv2.COLOR_BGR2GRAY), 50, 150)
+    has_avatar = cv2.countNonZero(portrait_edges) / max(portrait_edges.size, 1) > 0.08
+
+    ball = img[int(height * 0.84):int(height * 0.99), int(width * 0.36):int(width * 0.64)]
+    ball_hsv = cv2.cvtColor(ball, cv2.COLOR_BGR2HSV)
+    red = cv2.inRange(ball_hsv, np.array([0, 80, 80]), np.array([12, 255, 255]))
+    white = cv2.inRange(ball_hsv, np.array([0, 0, 180]), np.array([180, 90, 255]))
+    has_ball = cv2.countNonZero(red | white) / max(ball.shape[0] * ball.shape[1], 1) > 0.12
+
+    nearby = img[int(height * 0.82):int(height * 0.99), int(width * 0.70):]
+    nearby_hsv = cv2.cvtColor(nearby, cv2.COLOR_BGR2HSV)
+    nearby_light = cv2.countNonZero(cv2.inRange(
+        nearby_hsv, np.array([0, 0, 170]), np.array([180, 110, 255])
+    )) / max(nearby.shape[0] * nearby.shape[1], 1)
+    has_nearby = nearby_light > 0.08
+
+    return int(has_avatar) + int(has_ball) + int(has_nearby) >= 2
+
+
 @router.get("/api/screen/detect_encounter")
 async def detect_encounter(serial: str = Query(min_length=1, max_length=200)):
     """Check screen state: encounter screen, post-catch summary ('ตกลง'), detail page, or map."""
@@ -328,6 +434,46 @@ async def dismiss_catch_summary(body: DismissCatchRequest):
         return {"ok": True, "dismissed": True, "action": "detail_close"}
 
     return {"ok": True, "dismissed": False}
+
+
+@router.post("/api/screen/dismiss_pokestop")
+async def dismiss_pokestop(body: DismissCatchRequest):
+    """Close a PokéStop photo-disc page only when its visual signature is present."""
+    from services.screen_capture import adb_read
+    import re
+
+    png = await capture_screen(body.serial)
+    now = time.monotonic()
+    state = _is_encounter_screen(png)
+    is_pokestop_screen = _is_pokestop_spin_screen(png)
+    if (
+        _is_main_map_hud(png)
+        or
+        (state["is_map_screen"] and not is_pokestop_screen)
+        or state["is_encounter"]
+        or state["is_catch_summary"]
+        or state["is_pokemon_detail"]
+        or not is_pokestop_screen
+    ):
+        _pokestop_screen_seen_at.pop(body.serial, None)
+        return {"ok": True, "detected": False, "dismissed": False, "reason": "not_pokestop_screen"}
+    first_seen = _pokestop_screen_seen_at.setdefault(body.serial, now)
+    if now - first_seen < 7.0:
+        return {
+            "ok": True,
+            "detected": True,
+            "dismissed": False,
+            "age_seconds": round(now - first_seen, 1),
+        }
+    activity = (await adb_read("-s", body.serial, "shell", "dumpsys", "activity", "activities")).decode(errors="replace")
+    if not re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*\bcom\.nianticlabs\.pokemongo/", activity):
+        raise HTTPException(status_code=400, detail="Pokémon GO must be the foreground app")
+    width, height = struct.unpack(">II", png[16:24])
+    x = str(round(0.50 * (width - 1)))
+    y = str(round(0.925 * (height - 1)))
+    await adb_read("-s", body.serial, "shell", "input", "tap", x, y)
+    _pokestop_screen_seen_at.pop(body.serial, None)
+    return {"ok": True, "detected": True, "dismissed": True, "action": "pokestop_close"}
 
 
 async def _get_touch_info(serial: str) -> tuple[str, int, int]:

@@ -896,6 +896,7 @@ let activeSpinWorkflow = null;
 let lastSpinTimestamp = 0;
 let activePokemonTap = false;
 let lastPokemonTapTimestamp = 0;
+let pokestopRecoveryBusy = false;
 
 function syncLiveToggles(isLive) {
   if ($("#screen-live-chk")) $("#screen-live-chk").checked = isLive;
@@ -1150,6 +1151,32 @@ async function clickDetectedPokemon(serial, boxes) {
   }
 }
 
+async function recoverStuckPokestop(serial) {
+  if (!serial || pokestopRecoveryBusy) return;
+  pokestopRecoveryBusy = true;
+  try {
+    const result = await api("/api/screen/dismiss_pokestop", { serial });
+    if (result.detected && !result.dismissed) {
+      appendSpinLog("pokestop", `⏳ หน้าหมุนเสาค้าง ${result.age_seconds || 0} วินาที`);
+    } else if (result.dismissed) {
+      appendSpinLog("pokestop", "↩️ หน้าหมุนเสาค้างเกิน 7 วินาที — กดปิดอัตโนมัติแล้ว");
+      lastPokemonTapTimestamp = Date.now();
+    }
+  } catch (err) {
+    appendSpinLog("error", `ปิดหน้าหมุนเสาไม่ได้: ${err.message || err}`);
+  } finally {
+    pokestopRecoveryBusy = false;
+  }
+}
+
+setInterval(() => {
+  if (document.hidden) return;
+  const serial = $("#screen-device-select")?.value;
+  if (serial && (isLiveEnabled() || isAutoPokemonEnabled() || isAutoSpinEnabled())) {
+    recoverStuckPokestop(serial);
+  }
+}, 2000);
+
 function chooseDetectedPokemon(boxes) {
   const threshold = Number($("#screen-threshold")?.value || 40);
   return boxes
@@ -1177,6 +1204,7 @@ async function captureAndDetectScreen() {
     const engine = $("#screen-engine-select")?.value || "ai";
     currentScreenBoxes = await detectScreenBoxes(screenFrameBitmap, serial, engine);
     await renderScreenCanvas(currentScreenBoxes);
+    await recoverStuckPokestop(serial);
     const eligibleStops = currentScreenBoxes.filter((b) => b.eligible);
     const statusMsg = `ตรวจพบเสาพร้อมหมุน ${eligibleStops.length} จุด (${engine === "ai" ? "AI Model" : "Heuristic"})`;
     $("#screen-status-text").textContent = statusMsg;
