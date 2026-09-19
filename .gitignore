@@ -43,5 +43,6 @@ dataset/labels/
 dataset/labels.cache
 runs/
 *.pt
-dataset/
+dataset/*
+!dataset/data.yaml
 

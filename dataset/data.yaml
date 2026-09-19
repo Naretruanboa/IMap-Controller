@@ -1,0 +1,11 @@
+names:
+  0: pokestop_active
+  1: pokestop_cooldown
+  2: pokestop_distant
+  3: gym
+  4: pokemon
+  5: gang_rocket
+  6: player
+path: /Users/naret/Documents/lab/iPhone GPS Web Controller/dataset
+train: train/images
+val: val/images
