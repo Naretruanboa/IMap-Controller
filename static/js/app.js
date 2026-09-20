@@ -897,6 +897,7 @@ let lastSpinTimestamp = 0;
 let activePokemonTap = false;
 let lastPokemonTapTimestamp = 0;
 let pokestopRecoveryBusy = false;
+let pokemonDetailRecoveryBusy = false;
 
 function syncLiveToggles(isLive) {
   if ($("#screen-live-chk")) $("#screen-live-chk").checked = isLive;
@@ -1184,11 +1185,30 @@ async function recoverStuckPokestop(serial) {
   }
 }
 
+async function recoverStuckPokemonDetail(serial) {
+  if (!serial || pokemonDetailRecoveryBusy || activeCatchWorkflow) return;
+  pokemonDetailRecoveryBusy = true;
+  try {
+    const result = await api("/api/screen/dismiss_pokemon_detail", { serial });
+    if (result.detected && !result.dismissed) {
+      appendSpinLog("detail", `⏳ หน้ารายละเอียด Pokémon ค้าง ${result.age_seconds || 0} วินาที`);
+    } else if (result.dismissed) {
+      appendSpinLog("detail", "↩️ หน้ารายละเอียด Pokémon ค้างเกิน 7 วินาที — กดปิดอัตโนมัติแล้ว");
+      lastPokemonTapTimestamp = Date.now();
+    }
+  } catch (err) {
+    appendSpinLog("error", `ปิดหน้ารายละเอียด Pokémon ไม่ได้: ${err.message || err}`);
+  } finally {
+    pokemonDetailRecoveryBusy = false;
+  }
+}
+
 setInterval(() => {
   if (document.hidden) return;
   const serial = $("#screen-device-select")?.value;
-  if (serial && (isLiveEnabled() || isAutoPokemonEnabled() || isAutoSpinEnabled())) {
+  if (serial && (isLiveEnabled() || isAutoPokemonEnabled() || isAutoSpinEnabled() || isAutoCatchEnabled())) {
     recoverStuckPokestop(serial);
+    recoverStuckPokemonDetail(serial);
   }
 }, 2000);
 

@@ -91,6 +91,11 @@ def test_is_encounter_screen_classification():
 
     # 3. Simulate Pokémon Detail Screen (Green HP bar + Green Power Up button + Teal Checkmark)
     img_detail = np.zeros((h, w, 3), dtype=np.uint8)
+    # CP text
+    img_detail[int(h * 0.06):int(h * 0.11), int(w * 0.36):int(w * 0.64)] = 255
+    # Star and camera controls
+    img_detail[int(h * 0.07):int(h * 0.12), int(w * 0.86):int(w * 0.94)] = 255
+    img_detail[int(h * 0.16):int(h * 0.21), int(w * 0.84):int(w * 0.94)] = 255
     img_detail[int(h*.44):int(h*.86), int(w*.08):int(w*.92)] = 245
     # Green HP bar at y: 0.55
     img_detail[int(h * 0.53):int(h * 0.57), int(w * 0.25):int(w * 0.75)] = [50, 220, 80]
@@ -98,6 +103,9 @@ def test_is_encounter_screen_classification():
     img_detail[int(h * 0.87):int(h * 0.93), int(w * 0.10):int(w * 0.40)] = [50, 200, 80]
     # Teal checkmark button at bottom center
     img_detail[int(h * 0.89):int(h * 0.96), int(w * 0.44):int(w * 0.56)] = [140, 180, 20]
+    # Bottom-right menu button
+    img_detail[int(h * 0.87):int(h * 0.96), int(w * 0.78):int(w * 0.96)] = [140, 180, 20]
+    img_detail[int(h * 0.90):int(h * 0.93), int(w * 0.84):int(w * 0.91)] = 245
     _, png_detail = cv2.imencode(".png", img_detail)
     res_detail = _is_encounter_screen(png_detail.tobytes())
     assert res_detail["is_pokemon_detail"] is True
@@ -297,12 +305,17 @@ def test_full_white_detail_card_is_not_map(background):
     from api.endpoints import _is_encounter_screen
     h, w = 1470, 826
     img = np.full((h, w, 3), background, dtype=np.uint8)
+    img[int(h * 0.06):int(h * 0.11), int(w * 0.36):int(w * 0.64)] = 255
+    img[int(h * 0.07):int(h * 0.12), int(w * 0.86):int(w * 0.94)] = 255
+    img[int(h * 0.16):int(h * 0.21), int(w * 0.84):int(w * 0.94)] = 255
     # Layout from the reported detail page: white card extends to the bottom.
     img[int(h*.407):, int(w*.024):int(w*.97)] = 255
     cv2.line(img, (int(w*.25), int(h*.555)),
              (int(w*.74), int(h*.555)), (170, 220, 0), 10)
     img[int(h*.87):int(h*.93), int(w*.07):int(w*.46)] = [140, 210, 60]
     cv2.circle(img, (int(w*.5), int(h*.925)), int(w*.06), (160, 150, 0), -1)
+    img[int(h * 0.87):int(h * 0.96), int(w * 0.78):int(w * 0.96)] = [140, 180, 20]
+    img[int(h * 0.90):int(h * 0.93), int(w * 0.84):int(w * 0.91)] = 245
     _, png = cv2.imencode(".png", img)
     state = _is_encounter_screen(png.tobytes())
     assert state["nearby_white"] > .10
@@ -332,6 +345,30 @@ async def test_dismiss_detail_taps_checkmark(monkeypatch):
     taps = [args for args in calls if "input" in args]
     assert len(taps) == 1
     assert taps[0][-2:] == ("412", "1344")
+
+
+async def test_stuck_detail_closes_even_if_map_hud_heuristic_matches(monkeypatch):
+    from api import endpoints
+    calls = []
+    async def capture(serial):
+        return b"\x89PNG\r\n\x1a\n" + b"0" * 8 + struct.pack(">II", 826, 1470)
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": False, "is_encounter": False,
+        "is_catch_summary": False, "is_pokemon_detail": True,
+    })
+    monkeypatch.setattr(endpoints, "_is_main_map_hud", lambda _: True)
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+    endpoints._pokemon_detail_seen_at["emulator"] = time.monotonic() - 8
+    result = await endpoints.dismiss_pokemon_detail(endpoints.DismissCatchRequest(serial="emulator"))
+    assert result["dismissed"] is True
+    assert result["action"] == "detail_close"
+    taps = [args for args in calls if "input" in args]
+    assert len(taps) == 1
 
 
 async def test_dismiss_pokestop_never_taps_main_map(monkeypatch):

@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 VERSION = "2.9.0"
 _pokestop_screen_seen_at: dict[str, float] = {}
+_pokemon_detail_seen_at: dict[str, float] = {}
 
 
 @router.get("/api/version")
@@ -130,23 +131,60 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
 
     is_catch_summary = green_ok_ratio > 0.45 and card_light_ratio > 0.40
 
-    # ── 2. Pokémon Detail / Stats Screen (CP at top + green checkmark ✓ at bottom) ──
+    # ── 2. Pokémon Detail / Stats Screen ──
+    detail_cp_region = img[int(h * 0.05):int(h * 0.13), int(w * 0.30):int(w * 0.70)]
+    detail_cp_gray = cv2.cvtColor(detail_cp_region, cv2.COLOR_BGR2GRAY)
+    detail_cp_white = cv2.countNonZero(cv2.inRange(detail_cp_gray, 220, 255)) / max(detail_cp_gray.size, 1)
+    has_detail_cp_text = detail_cp_white > 0.025
+
+    star_roi = img[int(h * 0.05):int(h * 0.14), int(w * 0.82):int(w * 0.98)]
+    camera_roi = img[int(h * 0.13):int(h * 0.23), int(w * 0.80):int(w * 0.98)]
+    star_gray = cv2.cvtColor(star_roi, cv2.COLOR_BGR2GRAY)
+    camera_gray = cv2.cvtColor(camera_roi, cv2.COLOR_BGR2GRAY)
+    star_white = cv2.countNonZero(cv2.inRange(star_gray, 190, 255)) / max(star_gray.size, 1)
+    camera_white = cv2.countNonZero(cv2.inRange(camera_gray, 190, 255)) / max(camera_gray.size, 1)
+    star_edges = cv2.countNonZero(cv2.Canny(star_gray, 60, 160)) / max(star_gray.size, 1)
+    camera_edges = cv2.countNonZero(cv2.Canny(camera_gray, 60, 160)) / max(camera_gray.size, 1)
+    has_detail_star_camera = (
+        star_white > 0.025
+        and camera_white > 0.025
+        and (star_edges + camera_edges) > 0.010
+    )
+
+    arc_roi = img[int(h * 0.12):int(h * 0.36), int(w * 0.08):int(w * 0.92)]
+    arc_gray = cv2.cvtColor(arc_roi, cv2.COLOR_BGR2GRAY)
+    arc_area = max(arc_gray.size, 1)
+    arc_white = cv2.countNonZero(cv2.inRange(arc_gray, 225, 255)) / arc_area
+    arc_edges = cv2.countNonZero(cv2.Canny(arc_gray, 55, 150)) / arc_area
+    has_detail_cp_arc = 0.012 < arc_white < 0.25 and arc_edges > 0.004
+
     check_btn_roi = img[int(h * 0.88):int(h * 0.96), int(w * 0.38):int(w * 0.62)]
-    hsv_check = cv2.cvtColor(check_btn_roi, cv2.COLOR_BGR2HSV)
-    check_area = max(check_btn_roi.shape[0] * check_btn_roi.shape[1], 1)
-    check_green_mask = cv2.inRange(hsv_check, np.array([35, 45, 45]), np.array([105, 255, 255]))
-    check_green_ratio = cv2.countNonZero(check_green_mask) / check_area
-    has_green_checkmark = check_green_ratio > 0.10
+    check_gray = cv2.cvtColor(check_btn_roi, cv2.COLOR_BGR2GRAY)
+    check_area = max(check_gray.size, 1)
+    check_light_ratio = cv2.countNonZero(cv2.inRange(check_gray, 135, 255)) / check_area
+    check_edge_ratio = cv2.countNonZero(cv2.Canny(check_gray, 55, 150)) / check_area
+    check_contrast = float(np.std(check_gray))
+    has_green_checkmark = check_edge_ratio > 0.006 and (check_light_ratio > 0.045 or check_contrast > 18.0)
+
+    menu_roi = img[int(h * 0.84):int(h * 0.98), int(w * 0.72):int(w * 0.98)]
+    menu_gray = cv2.cvtColor(menu_roi, cv2.COLOR_BGR2GRAY)
+    menu_area = max(menu_gray.size, 1)
+    menu_light = cv2.countNonZero(cv2.inRange(menu_gray, 135, 255)) / menu_area
+    menu_edges = cv2.countNonZero(cv2.Canny(menu_gray, 55, 150)) / menu_area
+    menu_contrast = float(np.std(menu_gray))
+    has_detail_menu = menu_edges > 0.005 and (menu_light > 0.04 or menu_contrast > 18.0)
 
     detail_card = img[int(h * .44):int(h * .86), int(w * .08):int(w * .92)]
-    detail_hsv = cv2.cvtColor(detail_card, cv2.COLOR_BGR2HSV)
-    detail_white = cv2.countNonZero(cv2.inRange(
-        detail_hsv, np.array([0, 0, 180]), np.array([180, 70, 255])
-    )) / max(detail_card.shape[0] * detail_card.shape[1], 1)
+    detail_gray = cv2.cvtColor(detail_card, cv2.COLOR_BGR2GRAY)
+    detail_white = cv2.countNonZero(cv2.inRange(detail_gray, 180, 255)) / max(detail_gray.size, 1)
 
     is_pokemon_detail = (
         not is_catch_summary
+        and has_detail_cp_text
+        and has_detail_star_camera
+        and has_detail_cp_arc
         and has_green_checkmark
+        and has_detail_menu
         and detail_white > 0.35
     )
 
@@ -295,8 +333,18 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
         "card_light_ratio": round(card_light_ratio, 4),
         "hp_green_ratio": 0.0,
         "has_detail_cp": is_pokemon_detail,
+        "has_detail_cp_text": has_detail_cp_text,
+        "has_detail_star_camera": has_detail_star_camera,
+        "has_detail_cp_arc": has_detail_cp_arc,
+        "has_detail_menu": has_detail_menu,
+        "detail_arc_white": round(arc_white, 4),
+        "detail_arc_edges": round(arc_edges, 4),
         "has_green_checkmark": has_green_checkmark,
-        "check_green_ratio": round(check_green_ratio, 4),
+        "check_green_ratio": round(check_light_ratio, 4),
+        "check_edge_ratio": round(check_edge_ratio, 4),
+        "check_contrast": round(check_contrast, 2),
+        "menu_edge_ratio": round(menu_edges, 4),
+        "menu_contrast": round(menu_contrast, 2),
         "yellow_ratio": round(yellow_ratio, 4),
         "dark_ratio": round(dark_ratio, 4),
         "red_ratio": round(red_ratio, 4),
@@ -466,6 +514,48 @@ async def dismiss_catch_summary(body: DismissCatchRequest):
         return {"ok": True, "dismissed": True, "action": "detail_close"}
 
     return {"ok": True, "dismissed": False}
+
+
+@router.post("/api/screen/dismiss_pokemon_detail")
+async def dismiss_pokemon_detail(body: DismissCatchRequest):
+    """Close a Pokémon detail page only after it has stayed visible for 7 seconds."""
+    from services.screen_capture import adb_read
+    import re
+
+    png = await capture_screen(body.serial)
+    now = time.monotonic()
+    state = _is_encounter_screen(png)
+    if (
+        (not state["is_pokemon_detail"] and _is_main_map_hud(png))
+        or (not state["is_pokemon_detail"] and _is_pokestop_spin_screen(png))
+        or state["is_map_screen"]
+        or state["is_encounter"]
+        or state["is_catch_summary"]
+        or not state["is_pokemon_detail"]
+    ):
+        _pokemon_detail_seen_at.pop(body.serial, None)
+        return {"ok": True, "detected": False, "dismissed": False, "reason": "not_pokemon_detail"}
+
+    first_seen = _pokemon_detail_seen_at.setdefault(body.serial, now)
+    if now - first_seen < 7.0:
+        return {
+            "ok": True,
+            "detected": True,
+            "dismissed": False,
+            "age_seconds": round(now - first_seen, 1),
+        }
+
+    activity = (await adb_read("-s", body.serial, "shell", "dumpsys", "activity", "activities")).decode(errors="replace")
+    if not re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*\bcom\.nianticlabs\.pokemongo/", activity):
+        raise HTTPException(status_code=400, detail="Pokémon GO must be the foreground app")
+    if len(png) < 24:
+        raise HTTPException(status_code=400, detail="Invalid screenshot dimensions")
+    width, height = struct.unpack(">II", png[16:24])
+    x = str(round(0.50 * (width - 1)))
+    y = str(round(0.915 * (height - 1)))
+    await adb_read("-s", body.serial, "shell", "input", "tap", x, y)
+    _pokemon_detail_seen_at.pop(body.serial, None)
+    return {"ok": True, "detected": True, "dismissed": True, "action": "detail_close"}
 
 
 @router.post("/api/screen/dismiss_pokestop")
