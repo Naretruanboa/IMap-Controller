@@ -1016,31 +1016,41 @@ async function renderScreenCanvas(boxes) {
   ctx.lineWidth = Math.max(2, sx * 3);
   ctx.font = `bold ${Math.round(13 * Math.max(1, sx))}px sans-serif`;
 
+  const classMeta = {
+    gym: { color: "#ef4444", text: "#ffffff", title: "Gym" },
+    pokemon: { color: "#f59e0b", text: "#ffffff", title: "Pokemon" },
+    gang_rocket: { color: "#a855f7", text: "#ffffff", title: "Gang Rocket" },
+    player: { color: "#38bdf8", text: "#082f49", title: "Player" },
+    pokestop_active: { color: "#49ef88", text: "#18251d", title: "Pokestop Active" },
+    pokestop_cooldown: { color: "#c88aff", text: "#18251d", title: "Pokestop Cooldown" },
+    pokestop_distant: { color: "#c2c9ce", text: "#18251d", title: "Pokestop Distant" },
+  };
+  const supportedOverlayClasses = new Set(["gym", "pokemon", "gang_rocket", "player"]);
+  const getClassMeta = (box) => {
+    if (classMeta[box.class_name]) return classMeta[box.class_name];
+    if (box.kind === "pokemon") return classMeta.pokemon;
+    if (box.color === "purple") return classMeta.pokestop_cooldown;
+    if (box.kind === "solid") return classMeta.pokestop_distant;
+    return box.score >= threshold ? classMeta.pokestop_active : { color: "#ffdb38", text: "#18251d", title: box.class_name || "Detection" };
+  };
+
   const visible = boxes
-    .filter((b) => b.kind === "ring" || b.kind === "pokemon" || b.eligible || showRejected)
+    .filter((b) => b.kind === "ring" || b.kind === "pokemon" || b.eligible || supportedOverlayClasses.has(b.class_name) || showRejected)
     .sort((a, b) => b.score - a.score);
   visible.forEach((box, index) => {
     const x = Math.max(0, box.x - 4),
       y = Math.max(0, box.y - 4),
       w = box.width + 8,
       h = box.height + 8;
-    const color =
-      box.kind === "pokemon" || box.class_name === "pokemon"
-        ? "#f59e0b"
-        : box.kind === "solid"
-          ? "#c2c9ce"
-          : box.color === "purple" || box.class_name === "pokestop_cooldown"
-            ? "#c88aff"
-            : box.score >= threshold
-              ? "#49ef88"
-              : "#ffdb38";
+    const meta = getClassMeta(box);
+    const color = meta.color;
     ctx.strokeStyle = color;
     ctx.strokeRect(x, y, w, h);
-    const tagW = Math.max(100, 120 * sx);
+    const labelPrefix = meta.title;
+    const tagW = Math.max(100, Math.min(w + 60 * sx, (labelPrefix.length * 8 + 58) * sx));
     ctx.fillStyle = color;
     ctx.fillRect(x, Math.max(0, y - 20 * sx), tagW, 20 * sx);
-    ctx.fillStyle = box.kind === "pokemon" || box.class_name === "pokemon" ? "#ffffff" : "#18251d";
-    const labelPrefix = box.class_name === "pokemon" ? "★ Pokemon" : box.class_name ? box.class_name : "";
+    ctx.fillStyle = meta.text;
     ctx.fillText(
       `#${index + 1} ${labelPrefix} ${box.score}%`,
       x + 4,
@@ -1049,19 +1059,24 @@ async function renderScreenCanvas(boxes) {
   });
 
   const eligibleStops = boxes.filter((b) => b.eligible && b.class_name === "pokestop_active" && b.score >= threshold).length;
-  const pokemonCount = boxes.filter((b) => b.class_name === "pokemon" || b.kind === "pokemon").length;
-  $("#screen-overlay-badge").textContent = `${eligibleStops} เสาฟ้า · ${pokemonCount} โปเกมอน`;
+  const trackedCounts = boxes.reduce((acc, box) => {
+    if (supportedOverlayClasses.has(box.class_name)) acc[box.class_name] = (acc[box.class_name] || 0) + 1;
+    return acc;
+  }, {});
+  $("#screen-overlay-badge").textContent =
+    `${eligibleStops} เสาฟ้า · ${trackedCounts.pokemon || 0} โปเกมอน · ${trackedCounts.gym || 0} ยิม`;
   const listContainer = $("#screen-detected-list");
   if (listContainer) {
     listContainer.replaceChildren();
     visible.forEach((box, idx) => {
       const isPoke = box.class_name === "pokemon" || box.kind === "pokemon";
+      const meta = getClassMeta(box);
       const item = document.createElement("div");
       item.className = "detected-stop-item";
       item.innerHTML = `
         <div class="stop-badge ${isPoke ? "pokemon" : box.eligible && box.score >= threshold ? "active" : "inactive"}">#${idx + 1}</div>
         <div class="stop-details">
-          <div class="stop-title">${isPoke ? "🌟 โปเกมอนป่า (Wild Pokémon)" : box.class_name || (box.color === "purple" ? "เสาคูลดาวน์ (ม่วง)" : "เสาพร้อมหมุน (ฟ้า)")} · <strong>${box.score}%</strong></div>
+          <div class="stop-title">${meta.title} · <strong>${box.score}%</strong></div>
           <div class="stop-reason hint">${box.reason || `พิกัด (${box.targetX || box.x}, ${box.targetY || box.y})`}</div>
         </div>
       `;

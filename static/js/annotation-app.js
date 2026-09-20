@@ -52,6 +52,36 @@
         setTimeout(() => { el.style.animation = 'toastOut 0.3s forwards'; setTimeout(() => el.remove(), 300); }, 2500);
     }
 
+    function getCanvasPlaceholder() {
+        let placeholder = document.getElementById('canvasPlaceholder');
+        if (placeholder) return placeholder;
+
+        const container = document.getElementById('canvasContainer');
+        if (!container) return null;
+
+        placeholder = document.createElement('div');
+        placeholder.className = 'ann-canvas__placeholder';
+        placeholder.id = 'canvasPlaceholder';
+        placeholder.innerHTML = `
+            <div class="ann-canvas__placeholder-icon">🖼️</div>
+            <div>Select an image or drag & drop files here</div>
+            <div class="ann-canvas__placeholder-hint">or click <b>➕ Upload Images</b> to add new images</div>
+        `;
+        container.appendChild(placeholder);
+        return placeholder;
+    }
+
+    function showEmptyCanvasState() {
+        const placeholder = getCanvasPlaceholder();
+        if (placeholder) placeholder.style.display = 'flex';
+
+        const imageInfo = document.getElementById('imageInfo');
+        if (imageInfo) imageInfo.textContent = 'No image selected';
+
+        renderObjectSummary();
+        renderBboxList();
+    }
+
     /* ── Config / Classes ─────────────────────────────────────── */
     async function loadConfig() {
         state.config = await api('/config');
@@ -266,7 +296,8 @@
 
             // Show/hide reopen button
             const isFinished = data.status === 'completed' || data.status === 'no_object' || data.status === 'skipped';
-            document.getElementById('btnReopen').style.display = isFinished ? '' : 'none';
+            const reopenButton = document.getElementById('btnReopen');
+            if (reopenButton) reopenButton.style.display = isFinished ? '' : 'none';
 
             // Load image on canvas
             await canvas.loadImage(`${API}/images/${id}/file`, data.width, data.height);
@@ -634,10 +665,7 @@
                 state.currentImage = null;
                 if (canvas) {
                     canvas.clear();
-                    document.getElementById('canvasPlaceholder').style.display = 'flex';
-                    document.getElementById('imageInfo').textContent = 'No image selected';
-                    renderObjectSummary();
-                    renderBboxList();
+                    showEmptyCanvasState();
                 }
             }
 
@@ -770,10 +798,7 @@
                 state.currentImage = null;
                 if (canvas) {
                     canvas.clear();
-                    document.getElementById('canvasPlaceholder').style.display = 'flex';
-                    document.getElementById('imageInfo').textContent = 'No image selected';
-                    renderObjectSummary();
-                    renderBboxList();
+                    showEmptyCanvasState();
                 }
             }
 

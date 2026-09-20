@@ -123,6 +123,31 @@ def test_is_encounter_screen_classification():
     assert res_enc["ball_type"] == "pokeball"
     assert res_enc["ready_to_throw"] is True
 
+    # 5. Large low Pokéball in flying encounter, like high/far Pokémon screens.
+    img_low_ball = np.zeros((h, w, 3), dtype=np.uint8)
+    img_low_ball[int(h * 0.03):int(h * 0.10), int(w * 0.03):int(w * 0.15)] = [255, 255, 255]
+    img_low_ball[int(h * 0.24):int(h * 0.28), int(w * 0.25):int(w * 0.75)] = [255, 255, 255]
+    img_low_ball[int(h * 0.10):int(h * 0.22), int(w * 0.20):int(w * 0.90)] = [200, 130, 50]
+    img_low_ball[int(h * 0.81):int(h * 0.87), int(w * 0.05):int(w * 0.20)] = [240, 240, 240]
+    img_low_ball[int(h * 0.81):int(h * 0.87), int(w * 0.80):int(w * 0.95)] = [240, 240, 240]
+    # White top enters the normal band, while the red body sits mostly below it.
+    img_low_ball[int(h * 0.72):int(h * 0.84), int(w * 0.34):int(w * 0.66)] = [245, 245, 245]
+    img_low_ball[int(h * 0.88):int(h * 0.94), int(w * 0.34):int(w * 0.66)] = [20, 20, 230]
+    _, png_low_ball = cv2.imencode(".png", img_low_ball)
+    res_low_ball = _is_encounter_screen(png_low_ball.tobytes())
+    assert res_low_ball["is_encounter"] is True
+    assert res_low_ball["ready_to_throw"] is True
+
+    # 6. Textured berry area can look like a trainer portrait, but encounter
+    # controls on both sides must keep the screen throw-ready.
+    img_textured_buttons = img_low_ball.copy()
+    for y in range(int(h * 0.81), int(h * 0.94), 6):
+        img_textured_buttons[y:y + 3, int(w * 0.05):int(w * 0.20)] = [255, 255, 255]
+    _, png_textured_buttons = cv2.imencode(".png", img_textured_buttons)
+    res_textured_buttons = _is_encounter_screen(png_textured_buttons.tobytes())
+    assert res_textured_buttons["is_encounter"] is True
+    assert res_textured_buttons["ready_to_throw"] is True
+
 
 
 async def test_dismiss_catch_summary_endpoint(monkeypatch):
@@ -185,6 +210,21 @@ def test_bottom_menu_ball_cannot_establish_encounter():
     result = _is_encounter_screen(png.tobytes())
     assert result["is_encounter"] is False
     assert result["has_pokeball"] is False
+
+    # PokéStop photo-disc screens can contain bright controls and large dark/white
+    # regions, but must never be treated as catch encounters.
+    stop = np.full((h, w, 3), [230, 210, 0], dtype=np.uint8)
+    stop[int(h * .08):int(h * .18), int(w * .04):int(w * .70)] = 255
+    cv2.circle(stop, (int(w * .50), int(h * .48)), int(w * .34), (120, 80, 30), -1)
+    cv2.circle(stop, (int(w * .50), int(h * .48)), int(w * .36), (255, 220, 0), 18)
+    stop[int(h * .23):int(h * .29), int(w * .36):int(w * .64)] = 245
+    cv2.circle(stop, (int(w * .90), int(h * .12)), int(w * .045), (245, 245, 245), -1)
+    stop[int(h * .80):int(h * .86), int(w * .18):int(w * .82)] = [180, 80, 235]
+    cv2.circle(stop, (int(w * .50), int(h * .925)), int(w * .055), (245, 245, 245), -1)
+    _, png = cv2.imencode(".png", stop)
+    result = _is_encounter_screen(png.tobytes())
+    assert result["is_encounter"] is False
+    assert result["ready_to_throw"] is False
 
 @pytest.mark.parametrize("size", [(900, 1600), (450, 800)])
 def test_trainer_hud_overrides_encounter_like_map(size):

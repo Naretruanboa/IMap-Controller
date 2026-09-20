@@ -199,7 +199,35 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
     # Great ball has blue body and red/white accents
     has_greatball = blue_ratio > 0.06 and (red_ratio > 0.005 or white_ratio > 0.04) and not has_ultraball
     has_premierball = white_ratio > 0.15 and dark_ratio > 0.04 and not is_pokemon_detail
-    has_catch_ball = has_pokeball or has_greatball or has_ultraball or has_premierball or (white_ratio > 0.06 and (red_ratio > 0.02 or yellow_ratio > 0.02 or blue_ratio > 0.02))
+
+    # Some large/flying encounters render the selected ball oversized and lower than
+    # the normal 70-88% band. Keep the original ratios for ball type, but use this
+    # wider lower ROI only as a ready-to-throw fallback after encounter controls pass.
+    lower_ball_region = img[int(h * 0.68):int(h * 0.94), int(w * 0.26):int(w * 0.74)]
+    hsv_lower_ball = cv2.cvtColor(lower_ball_region, cv2.COLOR_BGR2HSV)
+    lower_ball_area = max(lower_ball_region.shape[0] * lower_ball_region.shape[1], 1)
+    lower_red = (
+        cv2.countNonZero(cv2.inRange(hsv_lower_ball, np.array([0, 70, 70]), np.array([12, 255, 255]))) +
+        cv2.countNonZero(cv2.inRange(hsv_lower_ball, np.array([160, 70, 70]), np.array([180, 255, 255])))
+    ) / lower_ball_area
+    lower_yellow = cv2.countNonZero(
+        cv2.inRange(hsv_lower_ball, np.array([18, 70, 70]), np.array([38, 255, 255]))
+    ) / lower_ball_area
+    lower_blue = cv2.countNonZero(
+        cv2.inRange(hsv_lower_ball, np.array([95, 70, 70]), np.array([135, 255, 255]))
+    ) / lower_ball_area
+    lower_white = cv2.countNonZero(
+        cv2.inRange(hsv_lower_ball, np.array([0, 0, 180]), np.array([180, 55, 255]))
+    ) / lower_ball_area
+    has_large_low_ball = lower_white > 0.10 and (lower_red > 0.025 or lower_yellow > 0.025 or lower_blue > 0.025)
+    has_catch_ball = (
+        has_pokeball
+        or has_greatball
+        or has_ultraball
+        or has_premierball
+        or (white_ratio > 0.06 and (red_ratio > 0.02 or yellow_ratio > 0.02 or blue_ratio > 0.02))
+        or has_large_low_ball
+    )
 
     # 4B. Berry menu button bottom left & Ball selector menu button bottom right
     bl = img[int(h * 0.80):int(h * 0.94), int(w * 0.04):int(w * 0.22)]
@@ -229,10 +257,14 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
     gray_nearby = cv2.cvtColor(map_nearby, cv2.COLOR_BGR2GRAY)
     nearby_white = cv2.countNonZero(cv2.inRange(gray_nearby, 200, 255)) / max(map_nearby.shape[0] * map_nearby.shape[1], 1)
 
+    trainer_avatar_blocks_encounter = has_trainer_avatar and (name_white > 0.05 or not has_encounter_buttons)
+    is_pokestop_spin_screen = _is_pokestop_spin_screen(png_bytes)
+
     is_encounter = (
         not is_catch_summary
         and not is_pokemon_detail
-        and not has_trainer_avatar
+        and not is_pokestop_spin_screen
+        and not trainer_avatar_blocks_encounter
         and has_running_man
         and has_encounter_buttons
         and has_catch_ball
