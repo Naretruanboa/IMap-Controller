@@ -33,7 +33,7 @@ from services.catch_summary_ocr import has_total_label
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 _pokestop_screen_seen_at: dict[str, float] = {}
 
 
