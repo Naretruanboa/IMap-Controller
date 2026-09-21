@@ -26,7 +26,13 @@ async function api(path, body, method = body === undefined ? "GET" : "POST") {
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const data = await response.json();
+  const text = await response.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_) {
+    data = { detail: text || response.statusText || "Non-JSON response" };
+  }
   if (!response.ok)
     throw new Error(
       typeof data.detail === "string"
@@ -907,8 +913,12 @@ let activeSpinWorkflow = null;
 let lastSpinTimestamp = 0;
 let activePokemonTap = false;
 let lastPokemonTapTimestamp = 0;
+let lastAutoTargetKind = null;
 let pokestopRecoveryBusy = false;
 let pokemonDetailRecoveryBusy = false;
+let autoCloseTimer = null;
+let autoCloseBusy = false;
+let autoCloseTick = 0;
 
 function syncLiveToggles(isLive) {
   if ($("#screen-live-chk")) $("#screen-live-chk").checked = isLive;
@@ -929,6 +939,11 @@ function syncAutoCatchToggles(isAuto) {
   if ($("#screen-auto-catch-chk")) $("#screen-auto-catch-chk").checked = isAuto;
   if ($("#screen-auto-catch-toggle")) $("#screen-auto-catch-toggle").checked = isAuto;
   if ($("#throw-auto-catch-chk")) $("#throw-auto-catch-chk").checked = isAuto;
+}
+
+function syncAutoCloseToggles(isAuto) {
+  if ($("#screen-auto-close-chk")) $("#screen-auto-close-chk").checked = isAuto;
+  if ($("#screen-auto-close-toggle")) $("#screen-auto-close-toggle").checked = isAuto;
 }
 
 function isLiveEnabled() {
@@ -952,6 +967,10 @@ function isAutoCatchEnabled() {
     $("#screen-auto-catch-toggle")?.checked ||
     $("#throw-auto-catch-chk")?.checked
   );
+}
+
+function isAutoCloseEnabled() {
+  return Boolean($("#screen-auto-close-chk")?.checked || $("#screen-auto-close-toggle")?.checked);
 }
 
 async function refreshScreenDevices() {
@@ -1179,7 +1198,7 @@ async function clickDetectedPokemon(serial, boxes) {
 }
 
 async function recoverStuckPokestop(serial) {
-  if (!serial || pokestopRecoveryBusy) return;
+  if (!serial || pokestopRecoveryBusy || activeSpinWorkflow?.running) return;
   pokestopRecoveryBusy = true;
   try {
     const result = await api("/api/screen/dismiss_pokestop", { serial });
@@ -1214,6 +1233,41 @@ async function recoverStuckPokemonDetail(serial) {
   }
 }
 
+async function runAutoCloseButtonsOnce() {
+  const serial = $("#screen-device-select")?.value;
+  if (!serial || !isAutoCloseEnabled() || autoCloseBusy || document.hidden || activeSpinWorkflow?.running) return;
+  autoCloseBusy = true;
+  try {
+    autoCloseTick++;
+    const result = await api("/api/screen/auto_close_buttons", { serial });
+    if (result.dismissed) {
+      const label = result.action === "detail_close"
+        ? "ปุ่ม ✓ หน้ารายละเอียด Pokémon"
+        : "ปุ่ม ✕";
+      appendSpinLog("auto-close", `คลิก ${label} อัตโนมัติแล้ว`);
+      lastPokemonTapTimestamp = Date.now();
+    } else {
+      appendSpinLog("auto-close", `ตรวจรอบที่ ${autoCloseTick}: ยังไม่เจอปุ่ม ✓/✕ (${result.reason || "no_match"})`);
+    }
+  } catch (err) {
+    appendSpinLog("error", `Auto-Close ปุ่ม ✓/✕ ไม่สำเร็จ: ${err.message || err}`);
+  } finally {
+    autoCloseBusy = false;
+  }
+}
+
+function stopAutoCloseButtons() {
+  clearInterval(autoCloseTimer);
+  autoCloseTimer = null;
+  autoCloseTick = 0;
+}
+
+function startAutoCloseButtons() {
+  stopAutoCloseButtons();
+  runAutoCloseButtonsOnce();
+  autoCloseTimer = setInterval(runAutoCloseButtonsOnce, 10000);
+}
+
 setInterval(() => {
   if (document.hidden) return;
   const serial = $("#screen-device-select")?.value;
@@ -1228,6 +1282,20 @@ function chooseDetectedPokemon(boxes) {
   return boxes
     .filter((box) => (box.class_name === "pokemon" || box.kind === "pokemon") && box.score >= threshold)
     .sort((a, b) => b.score - a.score)[0];
+}
+
+function chooseNextMapTarget(image, boxes) {
+  const stop = isAutoSpinEnabled() ? chooseCandidate(image, boxes) : null;
+  const pokemon = isAutoPokemonEnabled() ? chooseDetectedPokemon(boxes) : null;
+
+  if (stop && pokemon) {
+    return lastAutoTargetKind === "pokemon"
+      ? { kind: "stop", target: stop }
+      : { kind: "pokemon", target: pokemon };
+  }
+  if (pokemon) return { kind: "pokemon", target: pokemon };
+  if (stop) return { kind: "stop", target: stop };
+  return null;
 }
 
 let activeCatchWorkflow = false;
@@ -1262,10 +1330,30 @@ async function captureAndDetectScreen() {
 
         // *** MAP SCREEN GUARD — skip auto-catch entirely ***
         if (enc.is_map_screen) {
-          const clickedPokemon = await clickDetectedPokemon(serial, currentScreenBoxes);
+          const nextTarget = chooseNextMapTarget(screenFrameBitmap, currentScreenBoxes);
+          if (nextTarget?.kind === "pokemon") {
+            const clickedPokemon = await clickDetectedPokemon(serial, currentScreenBoxes);
+            if (clickedPokemon) {
+              lastAutoTargetKind = "pokemon";
+              return;
+            }
+          }
+          if (nextTarget?.kind === "stop") {
+            appendSpinLog("auto-spin", "พบเสาพร้อมหมุนในระยะ — กำลังเริ่มหมุนอัตโนมัติ...");
+            setTimeout(() => {
+              if (isAutoSpinEnabled() && !activeSpinWorkflow?.running && !activeCatchWorkflow) {
+                lastAutoTargetKind = "stop";
+                runQuickSpinWorkflow(nextTarget.target);
+              }
+            }, 100);
+            return;
+          }
+          const clickedPokemon = !nextTarget && await clickDetectedPokemon(serial, currentScreenBoxes);
           if (clickedPokemon) return;
         } else if (enc.is_catch_summary) {
           await dismissCatchResult(serial, true);
+          return;
+        } else if (enc.is_pokestop_spin_screen) {
           return;
         } else if (enc.ready_to_throw) {
           appendSpinLog("auto-catch", "🎯 ตรวจพบหน้าจอ Encounter — กำลังเริ่มโยน Pokéball อัตโนมัติ...");
@@ -1276,14 +1364,16 @@ async function captureAndDetectScreen() {
       } catch (_) {}
     }
 
-    // Auto-Spin trigger
-    const pokemonHasPriority = isAutoPokemonEnabled() && Boolean(chooseDetectedPokemon(currentScreenBoxes));
-    if (isAutoSpinEnabled() && !pokemonHasPriority && !activeSpinWorkflow?.running && !activeCatchWorkflow && Date.now() - lastSpinTimestamp > 5000) {
+    // Auto-Spin trigger for spin-only mode, or when the encounter check is cooling down.
+    if (isAutoSpinEnabled() && !isAutoPokemonEnabled() && !activeSpinWorkflow?.running && !activeCatchWorkflow && Date.now() - lastSpinTimestamp > 5000) {
       const candidate = chooseCandidate(screenFrameBitmap, currentScreenBoxes);
       if (candidate) {
         appendSpinLog("auto-spin", "พบเสาพร้อมหมุนในระยะ — กำลังเริ่มหมุนอัตโนมัติ...");
         setTimeout(() => {
-          if (isAutoSpinEnabled() && !activeSpinWorkflow?.running && !activeCatchWorkflow) runQuickSpinWorkflow(candidate);
+          if (isAutoSpinEnabled() && !activeSpinWorkflow?.running && !activeCatchWorkflow) {
+            lastAutoTargetKind = "stop";
+            runQuickSpinWorkflow(candidate);
+          }
         }, 100);
       }
     }
@@ -1320,6 +1410,23 @@ async function dismissCatchResult(serial, automatic = false) {
   }
 }
 
+async function ensureCatchResultDismissed(serial, automatic = false, attempts = 7) {
+  if (!serial) return;
+  for (let i = 0; i < attempts; i++) {
+    if (automatic && !isAutoCatchEnabled()) return;
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const state = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
+      if (state.is_map_screen || state.is_encounter) return;
+      if (state.is_catch_summary || state.is_pokemon_detail) {
+        await dismissCatchResult(serial, automatic);
+      }
+    } catch (err) {
+      throwLog("ตรวจปิดหน้าผลจับซ้ำ: " + (err.message || err));
+    }
+  }
+}
+
 async function runAutoCatchWorkflow(serial) {
   if (activeCatchWorkflow || activeSpinWorkflow?.running || !serial || !isAutoCatchEnabled()) return;
   activeCatchWorkflow = true;
@@ -1345,6 +1452,11 @@ async function runAutoCatchWorkflow(serial) {
       const enc = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
 
       // *** MAP SCREEN SAFETY — abort immediately if on map ***
+      if (enc.is_pokestop_spin_screen) {
+        throwLog("🌀 ตรวจพบหน้า PokéStop — หยุด Auto-Catch เพื่อให้ฟังก์ชันปิดเสาทำงาน");
+        appendSpinLog("catch", "🌀 หน้า PokéStop — หยุด Auto-Catch");
+        break;
+      }
       if (enc.is_map_screen) {
         throwLog("🗺 ตรวจพบหน้าแผนที่ — หยุด Auto-Catch (ป้องกันชนกับหมุนเสา)");
         appendSpinLog("catch", "🗺 หน้าแผนที่ — หยุด Auto-Catch");
@@ -1387,6 +1499,7 @@ async function runAutoCatchWorkflow(serial) {
 
       let brokeOut = false;
       let caught = false;
+      let mapFrames = 0;
 
       // Check every 1.2s up to 10 seconds
       for (let poll = 0; poll < 8; poll++) {
@@ -1395,29 +1508,29 @@ async function runAutoCatchWorkflow(serial) {
         try {
           const check = await api("/api/screen/detect_encounter?serial=" + encodeURIComponent(serial));
           if (check.is_map_screen) {
-            caught = true;
-            throwLog("🎉 กลับสู่หน้าแผนที่แล้ว!");
-            break;
+            mapFrames++;
+            if (mapFrames >= 3 && poll >= 4) {
+              throwLog("🗺 เห็นหน้าแผนที่หลังโยน แต่ยังไม่พบหน้า XP/รายละเอียด — หยุดรอผลเพื่อไม่สรุปผิด");
+              break;
+            }
+            continue;
           }
           if (check.is_catch_summary) {
             caught = true;
             throwLog("🎉 จับ Pokémon สำเร็จ! กำลังกดตกลง...");
             await dismissCatchResult(serial, true);
+            await ensureCatchResultDismissed(serial, true);
             break;
           }
           if (check.is_pokemon_detail) {
             caught = true;
             throwLog("🎉 จับได้แล้ว! พบหน้ารายละเอียด — กำลังกดปุ่ม ✓ ปิด...");
-            try {
-              // Tap green ✓ checkmark at bottom-center (y: 0.915)
-              await api("/api/screen/input", { serial, action: "tap", x: 0.50, y: 0.915 });
-              await new Promise((r) => setTimeout(r, 800));
-              // Tap again in case first tap didn't register
-              await api("/api/screen/input", { serial, action: "tap", x: 0.50, y: 0.915 });
-            } catch (_) {}
+            await dismissCatchResult(serial, true);
+            await ensureCatchResultDismissed(serial, true);
             break;
           }
           if (poll >= 2 && check.ready_to_throw) {
+            mapFrames = 0;
             brokeOut = true;
             throwLog(`⚠️ Pokémon หลุดออกจากลูกบอล! กำลังเตรียมโยนรอบที่ ${attempts + 1}...`);
             appendSpinLog("catch", `Pokémon หลุดจากลูกบอล — โยนซ้ำ`);
@@ -1527,10 +1640,12 @@ $("#screen-engine-select")?.addEventListener("change", () => captureAndDetectScr
 $("#screen-open-overlay-btn")?.addEventListener("click", () => {
   $("#screen-overlay").hidden = false;
   captureAndDetectScreen();
+  if (isAutoCloseEnabled()) startAutoCloseButtons();
 });
 $("#screen-overlay-close")?.addEventListener("click", () => {
   $("#screen-overlay").hidden = true;
   clearTimeout(screenLiveTimer);
+  stopAutoCloseButtons();
 });
 $("#screen-overlay-dock")?.addEventListener("click", () => {
   const overlay = $("#screen-overlay");
@@ -1593,6 +1708,22 @@ function handleAutoCatchToggle(checked) {
 $("#screen-auto-catch-chk")?.addEventListener("change", (e) => handleAutoCatchToggle(e.target.checked));
 $("#screen-auto-catch-toggle")?.addEventListener("change", (e) => handleAutoCatchToggle(e.target.checked));
 $("#throw-auto-catch-chk")?.addEventListener("change", (e) => handleAutoCatchToggle(e.target.checked));
+
+function handleAutoCloseToggle(checked) {
+  syncAutoCloseToggles(checked);
+  if (checked) {
+    toast("เปิด Auto-Close ปุ่ม ✓/✕ ทุก 10 วินาที");
+    appendSpinLog("auto-close", "เปิด Auto-Close ปุ่ม ✓/✕ ทุก 10 วินาที");
+    startAutoCloseButtons();
+  } else {
+    toast("ปิด Auto-Close ปุ่ม ✓/✕");
+    appendSpinLog("auto-close", "ปิด Auto-Close ปุ่ม ✓/✕");
+    stopAutoCloseButtons();
+  }
+}
+
+$("#screen-auto-close-chk")?.addEventListener("change", (e) => handleAutoCloseToggle(e.target.checked));
+$("#screen-auto-close-toggle")?.addEventListener("change", (e) => handleAutoCloseToggle(e.target.checked));
 
 $("#quick-spin-btn")?.addEventListener("click", () => runQuickSpinWorkflow());
 $("#screen-spin-workflow-btn")?.addEventListener("click", () => runQuickSpinWorkflow());
@@ -1762,6 +1893,7 @@ $("#throw-ball-auto-btn")?.addEventListener("click", safe(async () => {
 
       let brokeOut = false;
       let caught = false;
+      let mapFrames = 0;
 
       // Check every 1.2s up to 10s
       for (let poll = 0; poll < 8; poll++) {
@@ -1774,23 +1906,29 @@ $("#throw-ball-auto-btn")?.addEventListener("click", safe(async () => {
             throwLog(`🎉 จับ Pokémon สำเร็จ! (พบหน้ารับรางวัล XP — โยน ${attempts} ครั้ง)`);
             toast("🎉 จับ Pokémon สำเร็จ!");
             await dismissCatchResult(serial);
+            await ensureCatchResultDismissed(serial);
             break;
           }
           if (check.is_pokemon_detail) {
             caught = true;
             throwLog("🎉 จับได้แล้ว! พบหน้ารายละเอียด Pokémon — กำลังกดปิด...");
             await dismissCatchResult(serial);
+            await ensureCatchResultDismissed(serial);
             break;
           }
           if (check.is_encounter) {
+            mapFrames = 0;
             brokeOut = true;
             throwLog(`⚠️ Pokémon หลุดออกจากลูกบอล! กำลังเตรียมโยนรอบที่ ${attempts + 1}...`);
             break;
           }
           if (check.is_map_screen) {
-            caught = true;
-            throwLog("🎉 จับเสร็จสิ้นและกลับสู่หน้าแผนที่แล้ว!");
-            break;
+            mapFrames++;
+            if (mapFrames >= 3 && poll >= 4) {
+              throwLog("🗺 เห็นหน้าแผนที่หลังโยน แต่ยังไม่พบหน้า XP/รายละเอียด — หยุดรอผลเพื่อไม่สรุปผิด");
+              break;
+            }
+            continue;
           }
         } catch (_) {}
       }
@@ -1800,9 +1938,7 @@ $("#throw-ball-auto-btn")?.addEventListener("click", safe(async () => {
       }
 
       if (!brokeOut && !caught) {
-        throwLog(`🎉 จับ Pokémon สำเร็จหรือจบการต่อสู้! (โยน ${attempts} ครั้ง)`);
-        toast("🎉 จบการต่อสู้!");
-        await dismissCatchResult(serial);
+        throwLog("⏹ ยังยืนยันผลจับไม่ได้ — หยุดโยนอัตโนมัติ");
         break;
       }
     } catch (err) {

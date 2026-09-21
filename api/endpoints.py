@@ -257,7 +257,11 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
     lower_white = cv2.countNonZero(
         cv2.inRange(hsv_lower_ball, np.array([0, 0, 180]), np.array([180, 55, 255]))
     ) / lower_ball_area
+    lower_dark = cv2.countNonZero(
+        cv2.inRange(hsv_lower_ball, np.array([0, 0, 0]), np.array([180, 255, 70]))
+    ) / lower_ball_area
     has_large_low_ball = lower_white > 0.10 and (lower_red > 0.025 or lower_yellow > 0.025 or lower_blue > 0.025)
+    has_large_low_white_ball = lower_white > 0.16 and (lower_red > 0.006 or lower_dark > 0.008)
     has_catch_ball = (
         has_pokeball
         or has_greatball
@@ -265,6 +269,7 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
         or has_premierball
         or (white_ratio > 0.06 and (red_ratio > 0.02 or yellow_ratio > 0.02 or blue_ratio > 0.02))
         or has_large_low_ball
+        or has_large_low_white_ball
     )
 
     # 4B. Berry menu button bottom left & Ball selector menu button bottom right
@@ -296,9 +301,11 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
     nearby_white = cv2.countNonZero(cv2.inRange(gray_nearby, 200, 255)) / max(map_nearby.shape[0] * map_nearby.shape[1], 1)
 
     trainer_avatar_blocks_encounter = has_trainer_avatar and (name_white > 0.05 or not has_encounter_buttons)
+    is_pokestop_spin_screen = _is_pokestop_spin_screen(png_bytes)
     is_encounter = (
         not is_catch_summary
         and not is_pokemon_detail
+        and not is_pokestop_spin_screen
         and not trainer_avatar_blocks_encounter
         and has_running_man
         and has_encounter_buttons
@@ -314,6 +321,7 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
         "ready_to_throw": is_encounter,
         "is_catch_summary": is_catch_summary,
         "is_pokemon_detail": is_pokemon_detail,
+        "is_pokestop_spin_screen": is_pokestop_spin_screen,
         "is_map_screen": is_map_screen,
         "has_trainer_avatar": has_trainer_avatar,
         "trainer_name_letters": int(name_white * 10),
@@ -344,6 +352,9 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
         "menu_contrast": round(menu_contrast, 2),
         "yellow_ratio": round(yellow_ratio, 4),
         "dark_ratio": round(dark_ratio, 4),
+        "lower_white_ratio": round(lower_white, 4),
+        "lower_dark_ratio": round(lower_dark, 4),
+        "lower_red_ratio": round(lower_red, 4),
         "red_ratio": round(red_ratio, 4),
         "blue_ratio": round(blue_ratio, 4),
         "white_tl_ratio": round(white_tl, 4),
@@ -368,6 +379,10 @@ def _is_pokestop_spin_screen(png_bytes: bytes) -> bool:
     """Detect the PokéStop photo-disc screen without confusing the map or encounter screen."""
     img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
+        return False
+    if _has_full_map_hud(png_bytes):
+        return False
+    if _has_map_center_pokeball_hud(png_bytes) and _has_trainer_avatar_hud(png_bytes):
         return False
     height, width = img.shape[:2]
 
@@ -442,31 +457,208 @@ def _is_pokestop_spin_screen(png_bytes: bytes) -> bool:
     return photo_std > 28.0 and has_close_button and controls_signature
 
 
+def _is_dynamax_screen(png_bytes: bytes) -> bool:
+    """Detect a Dynamax/Max Battle lobby screen with the bottom-center close button."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    if _has_full_map_hud(png_bytes):
+        return False
+    if _has_map_center_pokeball_hud(png_bytes) and _has_trainer_avatar_hud(png_bytes):
+        return False
+    height, width = img.shape[:2]
+
+    arena = img[int(height * 0.05):int(height * 0.80), :]
+    arena_hsv = cv2.cvtColor(arena, cv2.COLOR_BGR2HSV)
+    purple = cv2.inRange(arena_hsv, np.array([125, 35, 55]), np.array([175, 255, 255]))
+    purple_ratio = cv2.countNonZero(purple) / max(arena.shape[0] * arena.shape[1], 1)
+
+    timer = img[int(height * 0.45):int(height * 0.58), int(width * 0.68):int(width * 0.96)]
+    timer_gray = cv2.cvtColor(timer, cv2.COLOR_BGR2GRAY)
+    timer_dark = cv2.countNonZero(cv2.inRange(timer_gray, 0, 95)) / max(timer_gray.size, 1)
+    timer_light = cv2.countNonZero(cv2.inRange(timer_gray, 175, 255)) / max(timer_gray.size, 1)
+    timer_edges = cv2.countNonZero(cv2.Canny(timer_gray, 45, 140)) / max(timer_gray.size, 1)
+    has_timer_pill = timer_dark > 0.12 and timer_light > 0.015 and timer_edges > 0.006
+
+    mp = img[int(height * 0.88):int(height * 0.98), int(width * 0.72):]
+    mp_gray = cv2.cvtColor(mp, cv2.COLOR_BGR2GRAY)
+    mp_dark = cv2.countNonZero(cv2.inRange(mp_gray, 0, 105)) / max(mp_gray.size, 1)
+    mp_light = cv2.countNonZero(cv2.inRange(mp_gray, 165, 255)) / max(mp_gray.size, 1)
+    has_mp_pill = mp_dark > 0.18 and mp_light > 0.015
+
+    return _has_bottom_center_x_button(png_bytes) and purple_ratio > 0.18 and (has_timer_pill or has_mp_pill)
+
+
+def _is_gym_screen(png_bytes: bytes) -> bool:
+    """Detect a Gym detail/occupants screen with the bottom-center close button."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    if _has_full_map_hud(png_bytes):
+        return False
+    if _has_map_center_pokeball_hud(png_bytes) and _has_trainer_avatar_hud(png_bytes):
+        return False
+    height, width = img.shape[:2]
+
+    pokemon_area = img[int(height * 0.34):int(height * 0.72), int(width * 0.02):int(width * 0.98)]
+    hsv = cv2.cvtColor(pokemon_area, cv2.COLOR_BGR2HSV)
+    pink = cv2.inRange(hsv, np.array([145, 55, 110]), np.array([179, 255, 255]))
+    pink_ratio = cv2.countNonZero(pink) / max(pokemon_area.shape[0] * pokemon_area.shape[1], 1)
+
+    right_actions = img[int(height * 0.72):int(height * 0.97), int(width * 0.72):int(width * 0.98)]
+    right_gray = cv2.cvtColor(right_actions, cv2.COLOR_BGR2GRAY)
+    right_light = cv2.countNonZero(cv2.inRange(right_gray, 130, 255)) / max(right_gray.size, 1)
+    right_edges = cv2.countNonZero(cv2.Canny(right_gray, 45, 140)) / max(right_gray.size, 1)
+    has_action_buttons = right_light > 0.04 and right_edges > 0.008
+
+    title = img[int(height * 0.04):int(height * 0.18), int(width * 0.20):int(width * 0.90)]
+    title_gray = cv2.cvtColor(title, cv2.COLOR_BGR2GRAY)
+    title_light = cv2.countNonZero(cv2.inRange(title_gray, 175, 255)) / max(title_gray.size, 1)
+
+    return _has_bottom_center_x_button(png_bytes) and pink_ratio > 0.008 and has_action_buttons and title_light > 0.04
+
+
 def _is_main_map_hud(png_bytes: bytes) -> bool:
     """Detect the main map HUD so recovery can never tap the map screen."""
+    return _has_full_map_hud(png_bytes)
+
+
+def _has_full_map_hud(png_bytes: bytes) -> bool:
+    """Detect the normal map HUD: center Poké Ball, trainer avatar, and right-side buttons."""
+    return (
+        _has_map_center_pokeball_hud(png_bytes)
+        and _has_trainer_avatar_hud(png_bytes)
+        and _has_map_side_hud_icons(png_bytes)
+    )
+
+
+def _has_map_center_pokeball_hud(png_bytes: bytes) -> bool:
+    """Detect the red/white Poké Ball menu button at the bottom-center of the map."""
     img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return False
     height, width = img.shape[:2]
 
-    portrait = img[int(height * 0.82):int(height * 0.97), :int(width * 0.24)]
-    portrait_edges = cv2.Canny(cv2.cvtColor(portrait, cv2.COLOR_BGR2GRAY), 50, 150)
-    has_avatar = cv2.countNonZero(portrait_edges) / max(portrait_edges.size, 1) > 0.08
-
-    ball = img[int(height * 0.84):int(height * 0.99), int(width * 0.36):int(width * 0.64)]
+    ball = img[int(height * 0.84):int(height * 0.99), int(width * 0.34):int(width * 0.66)]
     ball_hsv = cv2.cvtColor(ball, cv2.COLOR_BGR2HSV)
-    red = cv2.inRange(ball_hsv, np.array([0, 80, 80]), np.array([12, 255, 255]))
-    white = cv2.inRange(ball_hsv, np.array([0, 0, 180]), np.array([180, 90, 255]))
-    has_ball = cv2.countNonZero(red | white) / max(ball.shape[0] * ball.shape[1], 1) > 0.12
+    red_low = cv2.inRange(ball_hsv, np.array([0, 75, 70]), np.array([15, 255, 255]))
+    red_high = cv2.inRange(ball_hsv, np.array([165, 75, 70]), np.array([180, 255, 255]))
+    white = cv2.inRange(ball_hsv, np.array([0, 0, 165]), np.array([180, 85, 255]))
+    area = max(ball.shape[0] * ball.shape[1], 1)
+    red_ratio = cv2.countNonZero(red_low | red_high) / area
+    white_ratio = cv2.countNonZero(white) / area
+    # The map action button is a real Poké Ball: it must contain both red and
+    # white in the bottom-center. A close X button can be bright, but not red.
+    has_ball = red_ratio > 0.018 and white_ratio > 0.030
+    return has_ball
 
-    nearby = img[int(height * 0.82):int(height * 0.99), int(width * 0.70):]
-    nearby_hsv = cv2.cvtColor(nearby, cv2.COLOR_BGR2HSV)
-    nearby_light = cv2.countNonZero(cv2.inRange(
-        nearby_hsv, np.array([0, 0, 170]), np.array([180, 110, 255])
-    )) / max(nearby.shape[0] * nearby.shape[1], 1)
-    has_nearby = nearby_light > 0.08
 
-    return int(has_avatar) + int(has_ball) + int(has_nearby) >= 2
+def _has_trainer_avatar_hud(png_bytes: bytes) -> bool:
+    """Detect the lower-left trainer portrait/name HUD on the map."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    height, width = img.shape[:2]
+
+    portrait = img[int(height * 0.82):int(height * 0.99), :int(width * 0.28)]
+    portrait_edges = cv2.Canny(cv2.cvtColor(portrait, cv2.COLOR_BGR2GRAY), 50, 150)
+    portrait_edge_ratio = cv2.countNonZero(portrait_edges) / max(portrait_edges.size, 1)
+
+    name_roi = img[int(height * 0.94):int(height * 0.99), :int(width * 0.28)]
+    name_gray = cv2.cvtColor(name_roi, cv2.COLOR_BGR2GRAY)
+    name_light = cv2.countNonZero(cv2.inRange(name_gray, 175, 255)) / max(name_gray.size, 1)
+
+    return (portrait_edge_ratio > 0.020 and name_light > 0.035) or portrait_edge_ratio > 0.075
+
+
+def _has_map_side_hud_icons(png_bytes: bytes) -> bool:
+    """Detect stacked right-side map HUD buttons such as binoculars and calendar."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    height, width = img.shape[:2]
+
+    # Map buttons can sit high on some layouts or down near the nearby strip
+    # when zoomed/tilted, so scan the full right-side HUD column.
+    roi = img[int(height * 0.42):int(height * 0.94), int(width * 0.72):int(width * 0.99)]
+    if roi.size == 0:
+        return False
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 45, 140)
+    light = cv2.inRange(gray, 165, 255)
+    mask = cv2.dilate(light | edges, np.ones((5, 5), np.uint8), iterations=1)
+    components, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+
+    icon_like = 0
+    roi_area = max(roi.shape[0] * roi.shape[1], 1)
+    for label in range(1, components):
+        x, y, w_box, h_box, area = stats[label]
+        if area / roi_area > 0.22:
+            continue
+        if int(width * 0.035) <= w_box <= int(width * 0.16) and int(height * 0.025) <= h_box <= int(height * 0.11):
+            if area > max(60, int(width * height * 0.00025)):
+                icon_like += 1
+
+    return icon_like >= 2
+
+
+
+def _has_bottom_center_x_button(png_bytes: bytes) -> bool:
+    """Detect the common bottom-center X close button used by menus, bag, gyms, and stops."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    height, width = img.shape[:2]
+
+    button = img[int(height * 0.84):int(height * 0.985), int(width * 0.36):int(width * 0.64)]
+    button_gray = cv2.cvtColor(button, cv2.COLOR_BGR2GRAY)
+    button_area = max(button_gray.size, 1)
+    button_light = cv2.countNonZero(cv2.inRange(button_gray, 145, 255)) / button_area
+    button_edges = cv2.countNonZero(cv2.Canny(button_gray, 45, 140)) / button_area
+
+    core = img[int(height * 0.895):int(height * 0.965), int(width * 0.43):int(width * 0.57)]
+    if core.size == 0:
+        return False
+    core_gray = cv2.cvtColor(core, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(core_gray, 45, 140)
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=max(8, int(min(core.shape[:2]) * 0.18)),
+        minLineLength=max(10, int(min(core.shape[:2]) * 0.26)),
+        maxLineGap=max(4, int(min(core.shape[:2]) * 0.12)),
+    )
+
+    has_pos_diag = False
+    has_neg_diag = False
+    if lines is not None:
+        try:
+            line_rows = np.asarray(lines, dtype=np.int32).reshape(-1, 4)
+            for x1, y1, x2, y2 in line_rows:
+                angle = np.degrees(np.arctan2(int(y2) - int(y1), int(x2) - int(x1)))
+                if 25 <= angle <= 70:
+                    has_pos_diag = True
+                if -70 <= angle <= -25:
+                    has_neg_diag = True
+        except (TypeError, ValueError):
+            has_pos_diag = False
+            has_neg_diag = False
+
+    edge_pixels = edges > 0
+    diag_mask = np.eye(edge_pixels.shape[0], edge_pixels.shape[1], dtype=np.uint8) > 0
+    anti_diag_mask = np.fliplr(diag_mask)
+    diag_kernel = np.ones((7, 7), np.uint8)
+    diag_mask = cv2.dilate(diag_mask.astype(np.uint8), diag_kernel, iterations=1).astype(bool)
+    anti_diag_mask = cv2.dilate(anti_diag_mask.astype(np.uint8), diag_kernel, iterations=1).astype(bool)
+    diag_hits = int(np.count_nonzero(edge_pixels & diag_mask))
+    anti_diag_hits = int(np.count_nonzero(edge_pixels & anti_diag_mask))
+    min_diag_hits = max(6, int(min(core.shape[:2]) * 0.16))
+    has_edge_x = diag_hits >= min_diag_hits and anti_diag_hits >= min_diag_hits
+
+    core_contrast = float(np.std(core_gray))
+    has_button_shell = button_light > 0.08 and button_edges > 0.004
+    return has_button_shell and core_contrast > 10.0 and ((has_pos_diag and has_neg_diag) or has_edge_x)
 
 
 @router.get("/api/screen/detect_encounter")
@@ -555,6 +747,128 @@ async def dismiss_pokemon_detail(body: DismissCatchRequest):
     return {"ok": True, "detected": True, "dismissed": True, "action": "detail_close"}
 
 
+@router.post("/api/screen/auto_close_buttons")
+async def auto_close_buttons(body: DismissCatchRequest):
+    """Immediately tap visible ✓ detail close or X PokéStop close buttons."""
+    from services.screen_capture import adb_read
+    import re
+
+    try:
+        png = await capture_screen(body.serial)
+        if len(png) < 24:
+            return {"ok": False, "detected": False, "dismissed": False, "reason": "invalid_screenshot"}
+
+        state = _is_encounter_screen(png)
+        is_pokestop_screen = _is_pokestop_spin_screen(png)
+        is_dynamax_screen = _is_dynamax_screen(png)
+        is_gym_screen = _is_gym_screen(png)
+        has_bottom_x = _has_bottom_center_x_button(png)
+        has_trainer_avatar = _has_trainer_avatar_hud(png)
+        has_map_pokeball = _has_map_center_pokeball_hud(png)
+        has_map_side_icons = _has_map_side_hud_icons(png)
+        is_main_map_hud = _is_main_map_hud(png)
+        map_hud_flags = {
+            "has_map_pokeball": has_map_pokeball,
+            "has_trainer_avatar": has_trainer_avatar,
+            "has_map_side_icons": has_map_side_icons,
+            "is_main_map_hud": is_main_map_hud,
+        }
+        if state["is_encounter"] or state["is_catch_summary"]:
+            return {
+                "ok": True,
+                "detected": False,
+                "dismissed": False,
+                "reason": "not_close_button_screen",
+                **map_hud_flags,
+            }
+        if has_map_pokeball and has_trainer_avatar and has_map_side_icons:
+            return {
+                "ok": True,
+                "detected": False,
+                "dismissed": False,
+                "reason": "main_map_hud",
+                "has_bottom_x": has_bottom_x,
+                "is_map_screen": state["is_map_screen"],
+                "is_pokestop_screen": is_pokestop_screen,
+                "is_dynamax_screen": is_dynamax_screen,
+                "is_gym_screen": is_gym_screen,
+                **map_hud_flags,
+            }
+        if has_map_pokeball and has_trainer_avatar:
+            return {
+                "ok": True,
+                "detected": False,
+                "dismissed": False,
+                "reason": "map_hud_partial",
+                "has_bottom_x": has_bottom_x,
+                "is_map_screen": state["is_map_screen"],
+                "is_pokestop_screen": is_pokestop_screen,
+                "is_dynamax_screen": is_dynamax_screen,
+                "is_gym_screen": is_gym_screen,
+                **map_hud_flags,
+            }
+
+        action = None
+        x_ratio = 0.50
+        y_ratio = 0.925
+        if state["is_pokemon_detail"]:
+            action = "detail_close"
+            y_ratio = 0.915
+        elif is_dynamax_screen:
+            action = "dynamax_close"
+            y_ratio = 0.925
+        elif is_gym_screen:
+            action = "gym_close"
+            y_ratio = 0.925
+        elif is_pokestop_screen:
+            action = "pokestop_close"
+            y_ratio = 0.925
+        else:
+            if has_bottom_x:
+                action = "bottom_x_close"
+                y_ratio = 0.925
+            else:
+                return {
+                    "ok": True,
+                    "detected": False,
+                    "dismissed": False,
+                "reason": "no_close_button",
+                "has_bottom_x": has_bottom_x,
+                "is_pokestop_screen": is_pokestop_screen,
+                "is_dynamax_screen": is_dynamax_screen,
+                "is_gym_screen": is_gym_screen,
+                "is_map_screen": state["is_map_screen"],
+                **map_hud_flags,
+            }
+
+        activity = (await adb_read("-s", body.serial, "shell", "dumpsys", "activity", "activities")).decode(errors="replace")
+        if not re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*\bcom\.nianticlabs\.pokemongo/", activity):
+            return {"ok": False, "detected": True, "dismissed": False, "reason": "pokemon_go_not_foreground"}
+
+        width, height = struct.unpack(">II", png[16:24])
+        x = str(round(x_ratio * (width - 1)))
+        y = str(round(y_ratio * (height - 1)))
+        await adb_read("-s", body.serial, "shell", "input", "tap", x, y)
+        return {
+            "ok": True,
+            "detected": True,
+            "dismissed": True,
+            "action": action,
+            "is_pokestop_screen": is_pokestop_screen,
+            "is_dynamax_screen": is_dynamax_screen,
+            "is_gym_screen": is_gym_screen,
+            **map_hud_flags,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "detected": False,
+            "dismissed": False,
+            "reason": "auto_close_error",
+            "detail": str(exc),
+        }
+
+
 @router.post("/api/screen/dismiss_pokestop")
 async def dismiss_pokestop(body: DismissCatchRequest):
     """Close a PokéStop photo-disc page only when its visual signature is present."""
@@ -565,8 +879,19 @@ async def dismiss_pokestop(body: DismissCatchRequest):
     now = time.monotonic()
     state = _is_encounter_screen(png)
     is_pokestop_screen = _is_pokestop_spin_screen(png)
+    is_dynamax_screen = _is_dynamax_screen(png)
+    is_gym_screen = _is_gym_screen(png)
+    has_full_map_hud = (
+        _has_map_center_pokeball_hud(png)
+        and _has_trainer_avatar_hud(png)
+        and _has_map_side_hud_icons(png)
+    )
     if (
-        _is_main_map_hud(png)
+        has_full_map_hud
+        or
+        is_dynamax_screen
+        or
+        is_gym_screen
         or
         (state["is_map_screen"] and not is_pokestop_screen)
         or state["is_encounter"]
@@ -575,7 +900,25 @@ async def dismiss_pokestop(body: DismissCatchRequest):
         or not is_pokestop_screen
     ):
         _pokestop_screen_seen_at.pop(body.serial, None)
-        return {"ok": True, "detected": False, "dismissed": False, "reason": "not_pokestop_screen"}
+        return {
+            "ok": True,
+            "detected": False,
+            "dismissed": False,
+            "reason": (
+                "main_map_hud"
+                if has_full_map_hud
+                else "dynamax_screen"
+                if is_dynamax_screen
+                else "gym_screen"
+                if is_gym_screen
+                else "not_pokestop_screen"
+            ),
+            "is_map_screen": state["is_map_screen"],
+            "is_pokestop_screen": is_pokestop_screen,
+            "is_dynamax_screen": is_dynamax_screen,
+            "is_gym_screen": is_gym_screen,
+            "has_full_map_hud": has_full_map_hud,
+        }
     first_seen = _pokestop_screen_seen_at.setdefault(body.serial, now)
     if now - first_seen < 7.0:
         return {

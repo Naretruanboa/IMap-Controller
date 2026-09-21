@@ -146,6 +146,22 @@ def test_is_encounter_screen_classification():
     assert res_low_ball["is_encounter"] is True
     assert res_low_ball["ready_to_throw"] is True
 
+    # 5B. Large white ball with only a thin red/dark seam, like Premier Ball or
+    # a Poké Ball rotated with the white face toward the camera.
+    img_white_ball = np.zeros((h, w, 3), dtype=np.uint8)
+    img_white_ball[int(h * 0.03):int(h * 0.10), int(w * 0.03):int(w * 0.15)] = [255, 255, 255]
+    img_white_ball[int(h * 0.24):int(h * 0.28), int(w * 0.25):int(w * 0.75)] = [255, 255, 255]
+    img_white_ball[int(h * 0.10):int(h * 0.22), int(w * 0.20):int(w * 0.90)] = [200, 130, 50]
+    img_white_ball[int(h * 0.81):int(h * 0.87), int(w * 0.05):int(w * 0.20)] = [240, 240, 240]
+    img_white_ball[int(h * 0.81):int(h * 0.87), int(w * 0.80):int(w * 0.95)] = [240, 240, 240]
+    cv2.circle(img_white_ball, (int(w * 0.50), int(h * 0.82)), int(w * 0.15), [245, 245, 245], -1)
+    cv2.ellipse(img_white_ball, (int(w * 0.50), int(h * 0.90)), (int(w * 0.15), int(h * 0.025)), 0, 0, 360, [20, 20, 230], -1)
+    cv2.ellipse(img_white_ball, (int(w * 0.50), int(h * 0.89)), (int(w * 0.15), int(h * 0.012)), 0, 0, 360, [20, 20, 20], -1)
+    _, png_white_ball = cv2.imencode(".png", img_white_ball)
+    res_white_ball = _is_encounter_screen(png_white_ball.tobytes())
+    assert res_white_ball["is_encounter"] is True
+    assert res_white_ball["ready_to_throw"] is True
+
     # 6. Textured berry area can look like a trainer portrait, but encounter
     # controls on both sides must keep the screen throw-ready.
     img_textured_buttons = img_low_ball.copy()
@@ -233,6 +249,7 @@ def test_bottom_menu_ball_cannot_establish_encounter():
     result = _is_encounter_screen(png.tobytes())
     assert result["is_encounter"] is False
     assert result["ready_to_throw"] is False
+    assert result["is_pokestop_spin_screen"] is True
 
 @pytest.mark.parametrize("size", [(900, 1600), (450, 800)])
 def test_trainer_hud_overrides_encounter_like_map(size):
@@ -325,6 +342,118 @@ def test_full_white_detail_card_is_not_map(background):
     assert state["ready_to_throw"] is False
 
 
+def test_main_map_hud_requires_real_pokeball_button():
+    import cv2
+    import numpy as np
+    from api.endpoints import _is_main_map_hud
+
+    h, w = 1600, 900
+    img_map = np.zeros((h, w, 3), dtype=np.uint8)
+    img_map[int(h * 0.84):int(h * 0.99), :int(w * 0.28)] = 80
+    cv2.circle(img_map, (int(w * 0.50), int(h * 0.915)), int(w * 0.06), (245, 245, 245), -1)
+    cv2.ellipse(img_map, (int(w * 0.50), int(h * 0.895)), (int(w * 0.06), int(h * 0.03)), 0, 180, 360, (0, 0, 230), -1)
+    cv2.rectangle(img_map, (int(w * 0.76), int(h * 0.86)), (int(w * 0.98), int(h * 0.96)), (240, 240, 240), -1)
+    cv2.rectangle(img_map, (int(w * 0.79), int(h * 0.89)), (int(w * 0.84), int(h * 0.94)), (80, 80, 80), 4)
+    _, png_map = cv2.imencode(".png", img_map)
+    assert _is_main_map_hud(png_map.tobytes()) is True
+
+    img_close = np.zeros((h, w, 3), dtype=np.uint8)
+    cv2.circle(img_close, (int(w * 0.50), int(h * 0.925)), int(w * 0.055), (245, 245, 245), -1)
+    cv2.line(img_close, (int(w * 0.475), int(h * 0.905)), (int(w * 0.525), int(h * 0.945)), (80, 80, 80), 5)
+    cv2.line(img_close, (int(w * 0.525), int(h * 0.905)), (int(w * 0.475), int(h * 0.945)), (80, 80, 80), 5)
+    cv2.rectangle(img_close, (int(w * 0.76), int(h * 0.86)), (int(w * 0.98), int(h * 0.96)), (240, 240, 240), -1)
+    _, png_close = cv2.imencode(".png", img_close)
+    assert _is_main_map_hud(png_close.tobytes()) is False
+
+
+def test_pokestop_detector_rejects_zoomed_map_with_full_hud():
+    import cv2
+    import numpy as np
+    from api.endpoints import _is_pokestop_spin_screen
+
+    h, w = 1600, 900
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    img[:] = (90, 80, 50)
+
+    # Large nearby PokéStop-like ring on the map; this used to confuse the
+    # PokéStop page detector when zoomed in.
+    cv2.circle(img, (int(w * 0.72), int(h * 0.42)), int(w * 0.11), (255, 235, 0), 14)
+    cv2.circle(img, (int(w * 0.72), int(h * 0.42)), int(w * 0.075), (255, 235, 0), 6)
+
+    # Full map HUD: trainer avatar/name, center Poké Ball, right-side calendar/binoculars.
+    portrait = img[int(h * 0.82):int(h * 0.99), :int(w * 0.28)]
+    portrait[:] = (70, 70, 70)
+    cv2.circle(portrait, (int(w * 0.12), int(h * 0.08)), int(w * 0.07), (210, 210, 210), 6)
+    cv2.rectangle(img, (int(w * 0.02), int(h * 0.95)), (int(w * 0.24), int(h * 0.985)), (230, 230, 230), -1)
+    cv2.circle(img, (int(w * 0.50), int(h * 0.915)), int(w * 0.06), (245, 245, 245), -1)
+    cv2.ellipse(img, (int(w * 0.50), int(h * 0.895)), (int(w * 0.06), int(h * 0.03)), 0, 180, 360, (0, 0, 230), -1)
+    for cy in (0.76, 0.85):
+        cv2.circle(img, (int(w * 0.91), int(h * cy)), int(w * 0.045), (238, 238, 238), -1)
+        cv2.circle(img, (int(w * 0.91), int(h * cy)), int(w * 0.045), (90, 90, 90), 3)
+
+    _, png = cv2.imencode(".png", img)
+    assert _is_pokestop_spin_screen(png.tobytes()) is False
+
+
+def test_gym_and_dynamax_detectors_reject_zoomed_map_with_full_hud():
+    import cv2
+    import numpy as np
+    from api.endpoints import _is_dynamax_screen, _is_gym_screen
+
+    h, w = 1600, 900
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    img[:] = (95, 85, 70)
+
+    # Distant gym-like structure and pink/red markers on the map.
+    cv2.circle(img, (int(w * 0.82), int(h * 0.38)), int(w * 0.09), (235, 235, 245), -1)
+    cv2.circle(img, (int(w * 0.82), int(h * 0.38)), int(w * 0.07), (180, 80, 235), 8)
+    for cx, cy in ((0.18, 0.48), (0.34, 0.44), (0.68, 0.46)):
+        cv2.circle(img, (int(w * cx), int(h * cy)), int(w * 0.035), (240, 70, 155), -1)
+
+    # Full map HUD.
+    portrait = img[int(h * 0.82):int(h * 0.99), :int(w * 0.28)]
+    portrait[:] = (70, 70, 70)
+    cv2.circle(portrait, (int(w * 0.12), int(h * 0.08)), int(w * 0.07), (210, 210, 210), 6)
+    cv2.rectangle(img, (int(w * 0.02), int(h * 0.95)), (int(w * 0.24), int(h * 0.985)), (230, 230, 230), -1)
+    cv2.circle(img, (int(w * 0.50), int(h * 0.915)), int(w * 0.06), (245, 245, 245), -1)
+    cv2.ellipse(img, (int(w * 0.50), int(h * 0.895)), (int(w * 0.06), int(h * 0.03)), 0, 180, 360, (0, 0, 230), -1)
+    for cy in (0.76, 0.85):
+        cv2.circle(img, (int(w * 0.91), int(h * cy)), int(w * 0.045), (238, 238, 238), -1)
+        cv2.circle(img, (int(w * 0.91), int(h * cy)), int(w * 0.045), (90, 90, 90), 3)
+
+    _, png = cv2.imencode(".png", img)
+    assert _is_gym_screen(png.tobytes()) is False
+    assert _is_dynamax_screen(png.tobytes()) is False
+
+
+def test_close_screen_detectors_reject_map_with_center_ball_and_avatar_even_without_side_icons():
+    import cv2
+    import numpy as np
+    from api.endpoints import _is_dynamax_screen, _is_gym_screen, _is_pokestop_spin_screen
+
+    h, w = 1600, 900
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    img[:] = (95, 85, 70)
+
+    # Gym/raid-like clutter in the map scene.
+    cv2.circle(img, (int(w * 0.82), int(h * 0.38)), int(w * 0.09), (235, 235, 245), -1)
+    cv2.circle(img, (int(w * 0.82), int(h * 0.38)), int(w * 0.07), (180, 80, 235), 8)
+    cv2.circle(img, (int(w * 0.42), int(h * 0.42)), int(w * 0.08), (255, 235, 0), 10)
+
+    # The two strongest map invariants visible in the reported screenshot.
+    portrait = img[int(h * 0.82):int(h * 0.99), :int(w * 0.28)]
+    portrait[:] = (70, 70, 70)
+    cv2.circle(portrait, (int(w * 0.12), int(h * 0.08)), int(w * 0.07), (210, 210, 210), 6)
+    cv2.rectangle(img, (int(w * 0.02), int(h * 0.95)), (int(w * 0.24), int(h * 0.985)), (230, 230, 230), -1)
+    cv2.circle(img, (int(w * 0.50), int(h * 0.915)), int(w * 0.06), (245, 245, 245), -1)
+    cv2.ellipse(img, (int(w * 0.50), int(h * 0.895)), (int(w * 0.06), int(h * 0.03)), 0, 180, 360, (0, 0, 230), -1)
+
+    _, png = cv2.imencode(".png", img)
+    assert _is_pokestop_spin_screen(png.tobytes()) is False
+    assert _is_gym_screen(png.tobytes()) is False
+    assert _is_dynamax_screen(png.tobytes()) is False
+
+
 async def test_dismiss_detail_taps_checkmark(monkeypatch):
     from api import endpoints
     calls = []
@@ -414,7 +543,7 @@ async def test_dismiss_pokestop_allows_confirmed_spin_screen(monkeypatch):
 
     monkeypatch.setattr(endpoints, "capture_screen", capture)
     monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
-        "is_map_screen": True,
+        "is_map_screen": False,
         "is_encounter": False,
         "is_catch_summary": False,
         "is_pokemon_detail": False,
@@ -427,6 +556,361 @@ async def test_dismiss_pokestop_allows_confirmed_spin_screen(monkeypatch):
 
     assert result["dismissed"] is True
     assert result["action"] == "pokestop_close"
+    assert any("input" in args for args in calls)
+
+
+async def test_auto_close_taps_generic_bottom_x(monkeypatch):
+    import cv2
+    import numpy as np
+    from api import endpoints
+
+    calls = []
+    h, w = 1600, 900
+    img = np.full((h, w, 3), 220, dtype=np.uint8)
+    cv2.circle(img, (int(w * 0.50), int(h * 0.925)), int(w * 0.055), 235, -1)
+    cv2.circle(img, (int(w * 0.50), int(h * 0.925)), int(w * 0.055), 120, 4)
+    cv2.line(img, (int(w * 0.475), int(h * 0.905)), (int(w * 0.525), int(h * 0.945)), 80, 5)
+    cv2.line(img, (int(w * 0.525), int(h * 0.905)), (int(w * 0.475), int(h * 0.945)), 80, 5)
+    _, png = cv2.imencode(".png", img)
+
+    async def capture(_):
+        return png.tobytes()
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is True
+    assert result["action"] == "bottom_x_close"
+    taps = [args for args in calls if "input" in args]
+    assert len(taps) == 1
+    assert taps[0][-2:] == ("450", "1470")
+
+
+async def test_auto_close_taps_generic_bottom_x_even_if_broad_map_state_matches(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"0" * 16 + struct.pack(">II", 900, 1600)
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr(endpoints, "_is_main_map_hud", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is True
+    assert result["action"] == "bottom_x_close"
+    assert any("input" in args for args in calls)
+
+
+async def test_auto_close_never_taps_only_when_full_map_hud_is_visible(monkeypatch):
+    import cv2
+    import numpy as np
+    from api import endpoints
+
+    calls = []
+    h, w = 1600, 900
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    portrait = img[int(h * 0.82):int(h * 0.99), :int(w * 0.28)]
+    portrait[:] = (70, 70, 70)
+    cv2.circle(portrait, (int(w * 0.12), int(h * 0.08)), int(w * 0.07), (210, 210, 210), 6)
+    cv2.line(portrait, (int(w * 0.04), int(h * 0.02)), (int(w * 0.23), int(h * 0.15)), (230, 230, 230), 5)
+    cv2.rectangle(img, (int(w * 0.02), int(h * 0.95)), (int(w * 0.24), int(h * 0.985)), (230, 230, 230), -1)
+    for cy in (0.52, 0.64):
+        cv2.circle(img, (int(w * 0.91), int(h * cy)), int(w * 0.045), (238, 238, 238), -1)
+        cv2.circle(img, (int(w * 0.91), int(h * cy)), int(w * 0.045), (90, 90, 90), 3)
+        cv2.line(img, (int(w * 0.885), int(h * cy)), (int(w * 0.935), int(h * cy)), (80, 80, 80), 4)
+    cv2.circle(img, (int(w * 0.50), int(h * 0.915)), int(w * 0.06), (245, 245, 245), -1)
+    cv2.ellipse(img, (int(w * 0.50), int(h * 0.895)), (int(w * 0.06), int(h * 0.03)), 0, 180, 360, (0, 0, 230), -1)
+    _, png = cv2.imencode(".png", img)
+
+    async def capture(_):
+        return png.tobytes()
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is False
+    assert result["reason"] == "main_map_hud"
+    assert not any("input" in args for args in calls)
+
+
+async def test_auto_close_never_taps_main_map_even_if_x_detector_matches(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"map"
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr(endpoints, "_is_main_map_hud", lambda _: True)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is False
+    assert result["reason"] == "main_map_hud"
+    assert not any("input" in args for args in calls)
+
+async def test_auto_close_blocks_pokestop_false_positive_when_full_map_hud_matches(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"0" * 16 + struct.pack(">II", 900, 1600)
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_map_center_pokeball_hud", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_trainer_avatar_hud", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_map_side_hud_icons", lambda _: True)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is False
+    assert result["reason"] == "main_map_hud"
+    assert result["is_pokestop_screen"] is True
+    assert not any("input" in args for args in calls)
+
+
+async def test_auto_close_allows_confirmed_pokestop_without_full_map_hud(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"0" * 16 + struct.pack(">II", 900, 1600)
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": False,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_map_center_pokeball_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_trainer_avatar_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_map_side_hud_icons", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is True
+    assert result["action"] == "pokestop_close"
+    assert any("input" in args for args in calls)
+
+
+async def test_auto_close_allows_pokestop_when_map_state_matches_without_full_map_hud(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"0" * 16 + struct.pack(">II", 900, 1600)
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_map_center_pokeball_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_trainer_avatar_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_map_side_hud_icons", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is True
+    assert result["action"] == "pokestop_close"
+    assert result["is_pokestop_screen"] is True
+    assert any("input" in args for args in calls)
+
+
+async def test_auto_close_never_uses_bottom_x_when_map_ball_and_avatar_are_visible(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"0" * 16 + struct.pack(">II", 900, 1600)
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_dynamax_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_is_gym_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_map_center_pokeball_hud", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_trainer_avatar_hud", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_map_side_hud_icons", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is False
+    assert result["reason"] == "map_hud_partial"
+    assert not any("input" in args for args in calls)
+
+
+async def test_auto_close_labels_dynamax_before_pokestop(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"0" * 16 + struct.pack(">II", 900, 1600)
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_dynamax_screen", lambda _: True)
+    monkeypatch.setattr(endpoints, "_is_gym_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_map_center_pokeball_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_trainer_avatar_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_map_side_hud_icons", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is True
+    assert result["action"] == "dynamax_close"
+    assert result["is_dynamax_screen"] is True
+    assert any("input" in args for args in calls)
+
+
+async def test_auto_close_labels_gym_before_pokestop(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"0" * 16 + struct.pack(">II", 900, 1600)
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": True,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_dynamax_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_is_gym_screen", lambda _: True)
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: True)
+    monkeypatch.setattr(endpoints, "_has_map_center_pokeball_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_trainer_avatar_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_map_side_hud_icons", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is True
+    assert result["action"] == "gym_close"
+    assert result["is_gym_screen"] is True
     assert any("input" in args for args in calls)
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "pokemon-go-controller"
-version = "2.9.1"
+version = "2.9.2"
 description = "Pokemon GO Controller with AI Vision, PokéStop Auto-Spin & Native Auto-Catch Engine"
 authors = [{ name = "Naret" }]
 readme = "README.md"

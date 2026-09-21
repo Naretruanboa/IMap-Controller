@@ -4,7 +4,7 @@ const { readFileSync } = require("node:fs");
 const { runInNewContext } = require("node:vm");
 
 const source = readFileSync("static/js/app.js", "utf8");
-const workflow = source.slice(source.indexOf("async function runAutoCatchWorkflow("),
+const workflow = source.slice(source.indexOf("async function ensureCatchResultDismissed("),
   source.indexOf("async function runQuickSpinWorkflow("));
 const capture = source.slice(source.indexOf("async function captureAndDetectScreen("),
   source.indexOf("async function dismissCatchResult("));
@@ -25,8 +25,10 @@ function fixture(states) {
     recoverStuckPokestop: async () => {},
     recoverStuckPokemonDetail: async () => {},
     fetch: async () => ({ ok: true, blob: async () => ({}) }),
-    createImageBitmap: async () => ({}),
+    createImageBitmap: async () => ({ close() {} }),
     detectScreenBoxes: async () => [], renderScreenCanvas: async () => {},
+    chooseNextMapTarget: () => null,
+    clickDetectedPokemon: async () => false,
     api: async (path, body) => {
       calls.push({ path, body });
       if (path.includes("detect_encounter")) return states.shift() || {};
@@ -61,14 +63,44 @@ for (const result of [{ is_map_screen: true, is_pokemon_detail: true },
   test("after throw, dismiss only confirmed results: " + JSON.stringify(result), async () => {
     const f = fixture([{ is_encounter: true, ready_to_throw: true }, result]);
     await f.context.runAutoCatchWorkflow("device");
-    const expectedPaths = result.is_pokemon_detail && !result.is_map_screen
-      ? ["/api/screen/throw_ball", "/api/screen/input", "/api/screen/input"]
-      : ["/api/screen/throw_ball"];
-    assert.deepEqual(f.calls.filter(c => c.body).map(c => c.path), expectedPaths);
-    assert.equal(f.calls.some(c => c.path === "dismiss"), Boolean(!result.is_map_screen && result.is_catch_summary));
+    assert.deepEqual(f.calls.filter(c => c.body).map(c => c.path), ["/api/screen/throw_ball"]);
+    assert.equal(f.calls.some(c => c.path === "dismiss"), Boolean(!result.is_map_screen && (result.is_catch_summary || result.is_pokemon_detail)));
     assert.equal(f.context.activeCatchWorkflow, false);
   });
 }
+
+test("after throw waits through transient map until catch summary", async () => {
+  const f = fixture([
+    { is_encounter: true, ready_to_throw: true },
+    { is_map_screen: true },
+    { is_map_screen: true },
+    { is_catch_summary: true },
+  ]);
+  await f.context.runAutoCatchWorkflow("device");
+  assert.deepEqual(f.calls.filter(c => c.body).map(c => c.path), ["/api/screen/throw_ball"]);
+  assert.equal(f.calls.some(c => c.path === "dismiss"), true);
+});
+
+test("after catch keeps closing summary/detail for follow-up window", async () => {
+  const f = fixture([
+    { is_encounter: true, ready_to_throw: true },
+    { is_catch_summary: true },
+    { is_pokemon_detail: true },
+    { is_map_screen: true },
+  ]);
+  await f.context.runAutoCatchWorkflow("device");
+  assert.deepEqual(f.calls.filter(c => c.path === "dismiss").length, 2);
+});
+
+test("PokéStop screen blocks Auto-Catch even if ready flag is wrong", async () => {
+  const f = fixture([{ is_pokestop_spin_screen: true, ready_to_throw: true, is_encounter: true }]);
+  await f.context.captureAndDetectScreen();
+  assert.equal(f.calls.filter(c => c.body).length, 0);
+
+  const g = fixture([{ is_pokestop_spin_screen: true, ready_to_throw: true, is_encounter: true }]);
+  await g.context.runAutoCatchWorkflow("device");
+  assert.equal(g.calls.filter(c => c.body).length, 0);
+});
 
 test("queued workflow does nothing after disabling Auto-Catch", async () => {
   const f = fixture([{ is_encounter: true }]);
@@ -81,11 +113,35 @@ test("Auto-Spin spins eligible candidate on map screen", async () => {
   const f = fixture([{ is_map_screen: true }]);
   f.context.isAutoSpinEnabled = () => true;
   f.context.lastSpinTimestamp = 0;
+  f.context.chooseNextMapTarget = () => ({ kind: "stop", target: { x: 0.5, y: 0.5 } });
   f.context.chooseCandidate = () => ({ x: 0.5, y: 0.5 });
   let spins = 0;
   f.context.runQuickSpinWorkflow = async () => { spins++; };
   await f.context.captureAndDetectScreen();
   assert.equal(spins, 1);
+});
+
+test("map target picker alternates pokemon and stop when both are available", async () => {
+  const f = fixture([{ is_map_screen: true }, { is_map_screen: true }]);
+  f.context.isAutoSpinEnabled = () => true;
+  f.context.isAutoPokemonEnabled = () => true;
+  f.context.lastSpinTimestamp = 0;
+  f.context.chooseNextMapTarget = () => {
+    return f.context.lastAutoTargetKind === "pokemon"
+      ? { kind: "stop", target: { x: 0.5, y: 0.5 } }
+      : { kind: "pokemon", target: { score: 90 } };
+  };
+  f.context.clickDetectedPokemon = async () => true;
+  let spins = 0;
+  f.context.runQuickSpinWorkflow = async () => { spins++; };
+
+  await f.context.captureAndDetectScreen();
+  assert.equal(f.context.lastAutoTargetKind, "pokemon");
+
+  f.context.screenBusy = false;
+  await f.context.captureAndDetectScreen();
+  assert.equal(spins, 1);
+  assert.equal(f.context.lastAutoTargetKind, "stop");
 });
 
 test("opening Auto-Catch does not disable Auto-Spin", () => {
