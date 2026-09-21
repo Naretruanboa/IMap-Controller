@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import create_app
+from api.version import get_app_version
 
 POINT = {"latitude": 13.7563, "longitude": 100.5018}
 
@@ -38,7 +39,7 @@ def test_static_and_discovery(client):
     assert client.get("/api/devices").json()[0]["connection"] == "MOCK"
     assert client.get("/api/state").json()["device"]["connected"] is False
     ver = client.get("/api/version").json()
-    assert ver["version"] == "2.9.0"
+    assert ver["version"] == get_app_version()
     assert "features" in ver
 
 

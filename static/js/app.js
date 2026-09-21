@@ -35,6 +35,16 @@ async function api(path, body, method = body === undefined ? "GET" : "POST") {
     );
   return data;
 }
+async function loadAppVersion() {
+  try {
+    const info = await api("/api/version");
+    const label = `v${info.version}`;
+    document.querySelectorAll(".app-version").forEach((el) => {
+      el.textContent = label;
+    });
+    document.title = `Pokemon GO Controller ${label} · GPS & AI Catch`;
+  } catch (_) {}
+}
 function safe(action) {
   return async (...args) => {
     try {
@@ -44,6 +54,7 @@ function safe(action) {
     }
   };
 }
+loadAppVersion();
 function controls() {
   document
     .querySelectorAll("[data-control]")
@@ -1298,6 +1309,8 @@ async function dismissCatchResult(serial, automatic = false) {
       const res2 = await api("/api/screen/dismiss_catch_summary", { serial });
       if (res2.dismissed) {
         throwLog("👉 กดปุ่ม ✓ ปิดหน้ารายละเอียด Pokémon เรียบร้อย — กลับสู่หน้าแผนที่");
+      } else {
+        throwLog("⏳ ยังปิดหน้ารายละเอียด Pokémon ไม่ได้ — ตัวสำรอง 7 วิจะตรวจต่ออัตโนมัติ");
       }
     } else if (res1.dismissed && res1.action === "detail_close") {
       throwLog("👉 กดปุ่ม ✓ ปิดหน้ารายละเอียด Pokémon เรียบร้อย — กลับสู่หน้าแผนที่");

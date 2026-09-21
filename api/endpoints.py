@@ -29,11 +29,11 @@ from services.ai_detector import default_ai_detector
 from services.screen_capture import capture_screen, screen_devices
 from services.screen_input import ScreenInput, screen_input
 from services.catch_summary_ocr import has_total_label
+from api.version import get_app_version
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-VERSION = "2.9.0"
 _pokestop_screen_seen_at: dict[str, float] = {}
 _pokemon_detail_seen_at: dict[str, float] = {}
 
@@ -41,7 +41,7 @@ _pokemon_detail_seen_at: dict[str, float] = {}
 @router.get("/api/version")
 async def get_version():
     return {
-        "version": VERSION,
+        "version": get_app_version(),
         "name": "Pokemon GO Controller",
         "description": "Pokemon GO Controller · AI Vision & Native Auto-Catch Edition",
         "features": [
@@ -296,12 +296,9 @@ def _is_encounter_screen(png_bytes: bytes) -> dict:
     nearby_white = cv2.countNonZero(cv2.inRange(gray_nearby, 200, 255)) / max(map_nearby.shape[0] * map_nearby.shape[1], 1)
 
     trainer_avatar_blocks_encounter = has_trainer_avatar and (name_white > 0.05 or not has_encounter_buttons)
-    is_pokestop_spin_screen = _is_pokestop_spin_screen(png_bytes)
-
     is_encounter = (
         not is_catch_summary
         and not is_pokemon_detail
-        and not is_pokestop_spin_screen
         and not trainer_avatar_blocks_encounter
         and has_running_man
         and has_encounter_buttons

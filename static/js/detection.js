@@ -8,6 +8,15 @@ async function request(url) {
   if (!response.ok) { const error = await response.json(); throw new Error(error.detail || 'Request failed'); }
   return response;
 }
+async function loadAppVersion() {
+  try {
+    const info = await (await request('/api/version')).json();
+    const label = `v${info.version}`;
+    document.querySelectorAll('.app-version').forEach(el => { el.textContent = label; });
+    document.title = `Screen Detection ${label} · Pokemon GO Controller`;
+  } catch (_) {}
+}
+loadAppVersion();
 function stopLive() { $('#live').checked = false; clearTimeout(timer); }
 let currentBoxes = null;
 
