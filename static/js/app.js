@@ -1198,7 +1198,7 @@ async function clickDetectedPokemon(serial, boxes) {
 }
 
 async function recoverStuckPokestop(serial) {
-  if (!serial || pokestopRecoveryBusy || activeSpinWorkflow?.running) return;
+  if (!serial || pokestopRecoveryBusy || activeSpinWorkflow?.running || activeCatchWorkflow || isAutoCatchEnabled()) return;
   pokestopRecoveryBusy = true;
   try {
     const result = await api("/api/screen/dismiss_pokestop", { serial });
@@ -1318,7 +1318,6 @@ async function captureAndDetectScreen() {
     const engine = $("#screen-engine-select")?.value || "ai";
     currentScreenBoxes = await detectScreenBoxes(screenFrameBitmap, serial, engine);
     await renderScreenCanvas(currentScreenBoxes);
-    await recoverStuckPokestop(serial);
     const eligibleStops = currentScreenBoxes.filter((b) => b.eligible);
     const statusMsg = `ตรวจพบเสาพร้อมหมุน ${eligibleStops.length} จุด (${engine === "ai" ? "AI Model" : "Heuristic"})`;
     $("#screen-status-text").textContent = statusMsg;

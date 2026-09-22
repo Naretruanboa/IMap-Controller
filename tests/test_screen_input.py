@@ -172,6 +172,24 @@ def test_is_encounter_screen_classification():
     assert res_textured_buttons["is_encounter"] is True
     assert res_textured_buttons["ready_to_throw"] is True
 
+    # 7. Beach encounter with lots of cyan/blue background must not be blocked
+    # by the PokéStop screen detector.
+    img_beach = np.zeros((h, w, 3), dtype=np.uint8)
+    img_beach[int(h * 0.03):int(h * 0.10), int(w * 0.03):int(w * 0.15)] = [255, 255, 255]
+    img_beach[int(h * 0.24):int(h * 0.30), int(w * 0.18):int(w * 0.82)] = [245, 245, 245]
+    img_beach[int(h * 0.08):int(h * 0.36), :] = [235, 245, 250]
+    img_beach[int(h * 0.18):int(h * 0.36), :] = [230, 180, 20]
+    img_beach[int(h * 0.36):, :] = [160, 190, 215]
+    img_beach[int(h * 0.81):int(h * 0.90), int(w * 0.04):int(w * 0.22)] = [240, 240, 240]
+    img_beach[int(h * 0.81):int(h * 0.90), int(w * 0.78):int(w * 0.96)] = [240, 240, 240]
+    cv2.circle(img_beach, (int(w * 0.50), int(h * 0.90)), int(w * 0.16), [20, 20, 230], -1)
+    cv2.ellipse(img_beach, (int(w * 0.50), int(h * 0.94)), (int(w * 0.16), int(h * 0.055)), 0, 0, 360, [245, 245, 245], -1)
+    _, png_beach = cv2.imencode(".png", img_beach)
+    res_beach = _is_encounter_screen(png_beach.tobytes())
+    assert res_beach["is_pokestop_spin_screen"] is False
+    assert res_beach["is_encounter"] is True
+    assert res_beach["ready_to_throw"] is True
+
 
 
 async def test_dismiss_catch_summary_endpoint(monkeypatch):
@@ -559,6 +577,38 @@ async def test_dismiss_pokestop_allows_confirmed_spin_screen(monkeypatch):
     assert any("input" in args for args in calls)
 
 
+async def test_dismiss_pokestop_never_reports_stuck_on_encounter(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"encounter"
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": False,
+        "is_encounter": True,
+        "ready_to_throw": True,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_has_encounter_hud", lambda _: True)
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: True)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.dismiss_pokestop(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is False
+    assert result["detected"] is False
+    assert result["reason"] == "encounter_screen"
+    assert not any("input" in args for args in calls)
+
+
 async def test_auto_close_taps_generic_bottom_x(monkeypatch):
     import cv2
     import numpy as np
@@ -911,6 +961,43 @@ async def test_auto_close_labels_gym_before_pokestop(monkeypatch):
     assert result["dismissed"] is True
     assert result["action"] == "gym_close"
     assert result["is_gym_screen"] is True
+    assert any("input" in args for args in calls)
+
+
+async def test_auto_close_labels_gangrocket_even_without_generic_bottom_x(monkeypatch):
+    from api import endpoints
+
+    calls = []
+
+    async def capture(_):
+        return b"0" * 16 + struct.pack(">II", 900, 1600)
+
+    async def adb(*args):
+        calls.append(args)
+        return b"mResumedActivity: com.nianticlabs.pokemongo/Main"
+
+    monkeypatch.setattr(endpoints, "capture_screen", capture)
+    monkeypatch.setattr(endpoints, "_is_encounter_screen", lambda _: {
+        "is_map_screen": False,
+        "is_encounter": False,
+        "is_catch_summary": False,
+        "is_pokemon_detail": False,
+    })
+    monkeypatch.setattr(endpoints, "_is_gangrocket_screen", lambda _: True)
+    monkeypatch.setattr(endpoints, "_is_dynamax_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_is_gym_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_is_pokestop_spin_screen", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_bottom_center_x_button", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_map_center_pokeball_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_trainer_avatar_hud", lambda _: False)
+    monkeypatch.setattr(endpoints, "_has_map_side_hud_icons", lambda _: False)
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+
+    result = await endpoints.auto_close_buttons(endpoints.DismissCatchRequest(serial="emulator"))
+
+    assert result["dismissed"] is True
+    assert result["action"] == "gangrocket_close"
+    assert result["is_gangrocket_screen"] is True
     assert any("input" in args for args in calls)
 
 

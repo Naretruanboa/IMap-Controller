@@ -384,6 +384,8 @@ def _is_pokestop_spin_screen(png_bytes: bytes) -> bool:
         return False
     if _has_map_center_pokeball_hud(png_bytes) and _has_trainer_avatar_hud(png_bytes):
         return False
+    if _has_encounter_hud(png_bytes):
+        return False
     height, width = img.shape[:2]
 
     # The spin page has a large photo disc and a cyan/white close button at the
@@ -489,6 +491,43 @@ def _is_dynamax_screen(png_bytes: bytes) -> bool:
     return _has_bottom_center_x_button(png_bytes) and purple_ratio > 0.18 and (has_timer_pill or has_mp_pill)
 
 
+def _has_encounter_hud(png_bytes: bytes) -> bool:
+    """Detect the throw/catch screen controls so PokéStop recovery never runs during encounters."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    height, width = img.shape[:2]
+
+    berry = img[int(height * 0.80):int(height * 0.96), :int(width * 0.24)]
+    selector = img[int(height * 0.80):int(height * 0.96), int(width * 0.76):]
+    ball = img[int(height * 0.76):int(height * 0.99), int(width * 0.30):int(width * 0.70)]
+
+    def light_circle_score(region):
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        light = cv2.countNonZero(cv2.inRange(gray, 160, 255)) / max(gray.size, 1)
+        edges = cv2.countNonZero(cv2.Canny(gray, 45, 140)) / max(gray.size, 1)
+        return light, edges
+
+    berry_light, berry_edges = light_circle_score(berry)
+    selector_light, selector_edges = light_circle_score(selector)
+
+    ball_hsv = cv2.cvtColor(ball, cv2.COLOR_BGR2HSV)
+    red_low = cv2.inRange(ball_hsv, np.array([0, 80, 70]), np.array([15, 255, 255]))
+    red_high = cv2.inRange(ball_hsv, np.array([165, 80, 70]), np.array([180, 255, 255]))
+    white = cv2.inRange(ball_hsv, np.array([0, 0, 155]), np.array([180, 100, 255]))
+    ball_area = max(ball.shape[0] * ball.shape[1], 1)
+    red_ratio = cv2.countNonZero(red_low | red_high) / ball_area
+    white_ratio = cv2.countNonZero(white) / ball_area
+
+    top_controls = img[int(height * 0.04):int(height * 0.15), :]
+    top_gray = cv2.cvtColor(top_controls, cv2.COLOR_BGR2GRAY)
+    top_light = cv2.countNonZero(cv2.inRange(top_gray, 170, 255)) / max(top_gray.size, 1)
+
+    has_side_controls = berry_light > 0.05 and berry_edges > 0.006 and selector_light > 0.05 and selector_edges > 0.006
+    has_throw_ball = red_ratio > 0.035 and white_ratio > 0.030
+    return has_side_controls and has_throw_ball and top_light > 0.015
+
+
 def _is_gym_screen(png_bytes: bytes) -> bool:
     """Detect a Gym detail/occupants screen with the bottom-center close button."""
     img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
@@ -516,6 +555,48 @@ def _is_gym_screen(png_bytes: bytes) -> bool:
     title_light = cv2.countNonZero(cv2.inRange(title_gray, 175, 255)) / max(title_gray.size, 1)
 
     return _has_bottom_center_x_button(png_bytes) and pink_ratio > 0.008 and has_action_buttons and title_light > 0.04
+
+
+def _is_gangrocket_screen(png_bytes: bytes) -> bool:
+    """Detect a Team GO Rocket grunt screen with battle and close controls."""
+    img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    if _has_map_center_pokeball_hud(png_bytes) and _has_trainer_avatar_hud(png_bytes):
+        return False
+    height, width = img.shape[:2]
+
+    background = img[int(height * 0.05):int(height * 0.90), :]
+    hsv = cv2.cvtColor(background, cv2.COLOR_BGR2HSV)
+    purple = cv2.inRange(hsv, np.array([120, 20, 45]), np.array([170, 210, 230]))
+    purple_ratio = cv2.countNonZero(purple) / max(background.shape[0] * background.shape[1], 1)
+
+    chest = img[int(height * 0.30):int(height * 0.58), int(width * 0.32):int(width * 0.72)]
+    chest_hsv = cv2.cvtColor(chest, cv2.COLOR_BGR2HSV)
+    red_low = cv2.inRange(chest_hsv, np.array([0, 80, 80]), np.array([18, 255, 255]))
+    red_high = cv2.inRange(chest_hsv, np.array([165, 80, 80]), np.array([180, 255, 255]))
+    red_ratio = cv2.countNonZero(red_low | red_high) / max(chest.shape[0] * chest.shape[1], 1)
+
+    battle = img[int(height * 0.70):int(height * 0.84), int(width * 0.20):int(width * 0.82)]
+    battle_hsv = cv2.cvtColor(battle, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(battle_hsv, np.array([35, 55, 110]), np.array([95, 255, 255]))
+    green_ratio = cv2.countNonZero(green) / max(battle.shape[0] * battle.shape[1], 1)
+    battle_edges = cv2.countNonZero(cv2.Canny(cv2.cvtColor(battle, cv2.COLOR_BGR2GRAY), 45, 140)) / max(
+        battle.shape[0] * battle.shape[1], 1
+    )
+
+    close = img[int(height * 0.86):int(height * 0.985), int(width * 0.38):int(width * 0.62)]
+    close_hsv = cv2.cvtColor(close, cv2.COLOR_BGR2HSV)
+    cyan_green = cv2.inRange(close_hsv, np.array([65, 45, 100]), np.array([100, 255, 255]))
+    close_ratio = cv2.countNonZero(cyan_green) / max(close.shape[0] * close.shape[1], 1)
+
+    return (
+        purple_ratio > 0.18
+        and red_ratio > 0.010
+        and green_ratio > 0.20
+        and battle_edges > 0.004
+        and close_ratio > 0.05
+    )
 
 
 def _is_main_map_hud(png_bytes: bytes) -> bool:
@@ -759,9 +840,11 @@ async def auto_close_buttons(body: DismissCatchRequest):
             return {"ok": False, "detected": False, "dismissed": False, "reason": "invalid_screenshot"}
 
         state = _is_encounter_screen(png)
+        has_encounter_hud = _has_encounter_hud(png)
         is_pokestop_screen = _is_pokestop_spin_screen(png)
         is_dynamax_screen = _is_dynamax_screen(png)
         is_gym_screen = _is_gym_screen(png)
+        is_gangrocket_screen = _is_gangrocket_screen(png)
         has_bottom_x = _has_bottom_center_x_button(png)
         has_trainer_avatar = _has_trainer_avatar_hud(png)
         has_map_pokeball = _has_map_center_pokeball_hud(png)
@@ -773,12 +856,13 @@ async def auto_close_buttons(body: DismissCatchRequest):
             "has_map_side_icons": has_map_side_icons,
             "is_main_map_hud": is_main_map_hud,
         }
-        if state["is_encounter"] or state["is_catch_summary"]:
+        if state["is_encounter"] or state["is_catch_summary"] or state.get("ready_to_throw") or has_encounter_hud:
             return {
                 "ok": True,
                 "detected": False,
                 "dismissed": False,
                 "reason": "not_close_button_screen",
+                "has_encounter_hud": has_encounter_hud,
                 **map_hud_flags,
             }
         if has_map_pokeball and has_trainer_avatar and has_map_side_icons:
@@ -792,6 +876,7 @@ async def auto_close_buttons(body: DismissCatchRequest):
                 "is_pokestop_screen": is_pokestop_screen,
                 "is_dynamax_screen": is_dynamax_screen,
                 "is_gym_screen": is_gym_screen,
+                "is_gangrocket_screen": is_gangrocket_screen,
                 **map_hud_flags,
             }
         if has_map_pokeball and has_trainer_avatar:
@@ -805,6 +890,7 @@ async def auto_close_buttons(body: DismissCatchRequest):
                 "is_pokestop_screen": is_pokestop_screen,
                 "is_dynamax_screen": is_dynamax_screen,
                 "is_gym_screen": is_gym_screen,
+                "is_gangrocket_screen": is_gangrocket_screen,
                 **map_hud_flags,
             }
 
@@ -814,6 +900,9 @@ async def auto_close_buttons(body: DismissCatchRequest):
         if state["is_pokemon_detail"]:
             action = "detail_close"
             y_ratio = 0.915
+        elif is_gangrocket_screen:
+            action = "gangrocket_close"
+            y_ratio = 0.925
         elif is_dynamax_screen:
             action = "dynamax_close"
             y_ratio = 0.925
@@ -837,6 +926,7 @@ async def auto_close_buttons(body: DismissCatchRequest):
                 "is_pokestop_screen": is_pokestop_screen,
                 "is_dynamax_screen": is_dynamax_screen,
                 "is_gym_screen": is_gym_screen,
+                "is_gangrocket_screen": is_gangrocket_screen,
                 "is_map_screen": state["is_map_screen"],
                 **map_hud_flags,
             }
@@ -857,6 +947,7 @@ async def auto_close_buttons(body: DismissCatchRequest):
             "is_pokestop_screen": is_pokestop_screen,
             "is_dynamax_screen": is_dynamax_screen,
             "is_gym_screen": is_gym_screen,
+            "is_gangrocket_screen": is_gangrocket_screen,
             **map_hud_flags,
         }
     except Exception as exc:
@@ -878,6 +969,7 @@ async def dismiss_pokestop(body: DismissCatchRequest):
     png = await capture_screen(body.serial)
     now = time.monotonic()
     state = _is_encounter_screen(png)
+    has_encounter_hud = _has_encounter_hud(png)
     is_pokestop_screen = _is_pokestop_spin_screen(png)
     is_dynamax_screen = _is_dynamax_screen(png)
     is_gym_screen = _is_gym_screen(png)
@@ -895,6 +987,8 @@ async def dismiss_pokestop(body: DismissCatchRequest):
         or
         (state["is_map_screen"] and not is_pokestop_screen)
         or state["is_encounter"]
+        or state.get("ready_to_throw")
+        or has_encounter_hud
         or state["is_catch_summary"]
         or state["is_pokemon_detail"]
         or not is_pokestop_screen
@@ -911,12 +1005,15 @@ async def dismiss_pokestop(body: DismissCatchRequest):
                 if is_dynamax_screen
                 else "gym_screen"
                 if is_gym_screen
+                else "encounter_screen"
+                if state["is_encounter"] or state.get("ready_to_throw") or has_encounter_hud
                 else "not_pokestop_screen"
             ),
             "is_map_screen": state["is_map_screen"],
             "is_pokestop_screen": is_pokestop_screen,
             "is_dynamax_screen": is_dynamax_screen,
             "is_gym_screen": is_gym_screen,
+            "has_encounter_hud": has_encounter_hud,
             "has_full_map_hud": has_full_map_hud,
         }
     first_seen = _pokestop_screen_seen_at.setdefault(body.serial, now)
