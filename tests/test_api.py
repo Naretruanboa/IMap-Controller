@@ -43,6 +43,23 @@ def test_static_and_discovery(client):
     assert "features" in ver
 
 
+def test_screen_runtime_reset_endpoint(client):
+    from api import endpoints
+
+    endpoints._pokestop_screen_seen_at["emulator"] = time.monotonic()
+    endpoints._pokemon_detail_seen_at["emulator"] = time.monotonic()
+
+    response = client.post("/api/screen/runtime/reset")
+
+    assert response.status_code == 200
+    assert response.json()["cleared"] == {
+        "pokestop_screen_seen_at": 1,
+        "pokemon_detail_seen_at": 1,
+    }
+    assert endpoints._pokestop_screen_seen_at == {}
+    assert endpoints._pokemon_detail_seen_at == {}
+
+
 def test_place_search_endpoint(client):
     async def search(query, language):
         return [{"name": query, "latitude": 13.75, "longitude": 100.5, "type": "city"}]

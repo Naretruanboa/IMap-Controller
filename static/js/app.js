@@ -919,6 +919,8 @@ let pokemonDetailRecoveryBusy = false;
 let autoCloseTimer = null;
 let autoCloseBusy = false;
 let autoCloseTick = 0;
+const screenRuntimeResetMs = 60 * 1000;
+let screenRuntimeResetTimer = null;
 
 function syncLiveToggles(isLive) {
   if ($("#screen-live-chk")) $("#screen-live-chk").checked = isLive;
@@ -1268,6 +1270,41 @@ function startAutoCloseButtons() {
   autoCloseTimer = setInterval(runAutoCloseButtonsOnce, 10000);
 }
 
+async function resetScreenRuntimeState(reason = "periodic") {
+  if (activeSpinWorkflow?.running || activeCatchWorkflow) return false;
+  clearTimeout(screenLiveTimer);
+  screenLiveTimer = null;
+  screenBusy = false;
+  activePokemonTap = false;
+  pokestopRecoveryBusy = false;
+  pokemonDetailRecoveryBusy = false;
+  autoCloseBusy = false;
+  lastSpinTimestamp = 0;
+  lastPokemonTapTimestamp = 0;
+  lastCatchTimestamp = 0;
+  lastAutoTargetKind = null;
+  currentScreenBoxes = [];
+  activeSpinWorkflow = null;
+  activeCatchWorkflow = false;
+  if (screenFrameBitmap) {
+    try { screenFrameBitmap.close(); } catch (_) {}
+    screenFrameBitmap = null;
+  }
+  try {
+    await api("/api/screen/runtime/reset", { reason });
+  } catch (err) {
+    appendSpinLog("reset", `รีเซ็ต state ฝั่ง server ไม่สำเร็จ: ${err.message || err}`);
+  }
+  if (isAutoCloseEnabled()) startAutoCloseButtons();
+  syncLiveToggles(true);
+  const shouldPoll = !document.hidden && Boolean($("#screen-device-select")?.value);
+  if (shouldPoll) {
+    screenLiveTimer = setTimeout(captureAndDetectScreen, 500);
+  }
+  appendSpinLog("reset", `รีเซ็ต state ชั่วคราวแล้ว (${reason}) · เปิด Live Detection ต่อทุก 3 วิ`);
+  return true;
+}
+
 setInterval(() => {
   if (document.hidden) return;
   const serial = $("#screen-device-select")?.value;
@@ -1276,6 +1313,11 @@ setInterval(() => {
     recoverStuckPokemonDetail(serial);
   }
 }, 2000);
+
+screenRuntimeResetTimer = setInterval(() => {
+  if (document.hidden) return;
+  resetScreenRuntimeState("periodic-test-1m");
+}, screenRuntimeResetMs);
 
 function chooseDetectedPokemon(boxes) {
   const threshold = Number($("#screen-threshold")?.value || 40);

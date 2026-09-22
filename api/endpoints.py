@@ -38,6 +38,20 @@ _pokestop_screen_seen_at: dict[str, float] = {}
 _pokemon_detail_seen_at: dict[str, float] = {}
 
 
+def reset_screen_runtime_state() -> dict:
+    pokestop_count = len(_pokestop_screen_seen_at)
+    pokemon_detail_count = len(_pokemon_detail_seen_at)
+    _pokestop_screen_seen_at.clear()
+    _pokemon_detail_seen_at.clear()
+    return {
+        "ok": True,
+        "cleared": {
+            "pokestop_screen_seen_at": pokestop_count,
+            "pokemon_detail_seen_at": pokemon_detail_count,
+        },
+    }
+
+
 @router.get("/api/version")
 async def get_version():
     return {
@@ -58,6 +72,11 @@ async def get_version():
 @router.get("/api/screen/devices")
 async def list_screen_devices():
     return await screen_devices()
+
+
+@router.post("/api/screen/runtime/reset")
+async def reset_screen_runtime():
+    return reset_screen_runtime_state()
 
 
 @router.post("/api/screen/input")
