@@ -58,6 +58,29 @@ def test_throw_ball_script_builders():
     assert "usleep 8000" in curve_script
 
 
+def test_throw_ball_center_estimator_handles_low_ultraball():
+    import cv2
+    import numpy as np
+    from api.endpoints import _build_straight_script, _estimate_throw_ball_center
+
+    h, w = 1600, 900
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    img[:] = (160, 190, 215)
+    cv2.circle(img, (int(w * 0.50), int(h * 0.89)), int(w * 0.16), (245, 245, 245), -1)
+    cv2.ellipse(img, (int(w * 0.50), int(h * 0.84)), (int(w * 0.16), int(h * 0.09)), 0, 180, 360, (15, 20, 25), -1)
+    cv2.rectangle(img, (int(w * 0.43), int(h * 0.72)), (int(w * 0.47), int(h * 0.86)), (0, 230, 230), -1)
+    cv2.rectangle(img, (int(w * 0.53), int(h * 0.72)), (int(w * 0.57), int(h * 0.86)), (0, 230, 230), -1)
+    _, png = cv2.imencode(".png", img)
+
+    ball_x, ball_y = _estimate_throw_ball_center(png.tobytes(), w, h)
+    assert abs(ball_x - int(w * 0.50)) < 20
+    assert ball_y > int(h * 0.84)
+
+    script = _build_straight_script("/dev/input/event1", 1000, 1000, w, h, strength=0.6, ball_center=(ball_x, ball_y))
+    expected_start_y = int((ball_y / h) * 1000)
+    assert f"sendevent /dev/input/event1 3 54 {expected_start_y}" in script
+
+
 def test_is_encounter_screen_classification():
     import numpy as np
     import cv2
@@ -314,6 +337,38 @@ async def test_throw_rejects_map_before_sending_input(monkeypatch):
         await endpoints.throw_ball(endpoints.ThrowBallRequest(serial="emulator"))
     assert exc.value.status_code == 400
 
+
+async def test_ensure_touch_injector_replaces_binary_without_ball_center_flags(monkeypatch):
+    from api import endpoints
+
+    calls = []
+    pushed = []
+
+    async def adb(*args):
+        calls.append(args)
+        if "-ball-x" in args[-1]:
+            return b"0"
+        if "uname" in args:
+            return b"arm64"
+        return b""
+
+    class Proc:
+        async def communicate(self):
+            return b"", b""
+
+    async def create_subprocess_exec(*args, **_kwargs):
+        pushed.append(args)
+        return Proc()
+
+    monkeypatch.setattr("services.screen_capture.adb_read", adb)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", create_subprocess_exec)
+
+    assert await endpoints._ensure_touch_injector("emulator") is True
+    assert pushed
+    assert pushed[0][-1] == "/data/local/tmp/touch_injector"
+    assert any("chmod" in args[-1] for args in calls)
+
+
 @pytest.mark.parametrize("state", [
     {"is_map_screen": True, "is_encounter": False, "is_catch_summary": True},
     {"is_map_screen": False, "is_encounter": False, "is_catch_summary": False, "is_pokemon_detail": False},
@@ -470,6 +525,30 @@ def test_close_screen_detectors_reject_map_with_center_ball_and_avatar_even_with
     assert _is_pokestop_spin_screen(png.tobytes()) is False
     assert _is_gym_screen(png.tobytes()) is False
     assert _is_dynamax_screen(png.tobytes()) is False
+
+
+def test_gangrocket_detector_accepts_dark_blue_variant():
+    import cv2
+    import numpy as np
+    from api.endpoints import _is_gangrocket_screen
+
+    h, w = 1600, 900
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    img[:] = (45, 35, 20)
+    img[int(h * 0.03):int(h * 0.10), :] = (70, 55, 40)
+    img[int(h * 0.06):int(h * 0.15), int(w * 0.06):int(w * 0.45)] = (190, 190, 190)
+
+    # Rocket body and red R.
+    cv2.ellipse(img, (int(w * 0.50), int(h * 0.52)), (int(w * 0.22), int(h * 0.28)), 0, 0, 360, (45, 45, 45), -1)
+    cv2.putText(img, "R", (int(w * 0.42), int(h * 0.50)), cv2.FONT_HERSHEY_SIMPLEX, 4.0, (20, 55, 230), 16)
+
+    # Orange Rocket label, green battle button, teal close button.
+    cv2.putText(img, "ROCKET", (int(w * 0.08), int(h * 0.63)), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 130, 255), 5)
+    cv2.rectangle(img, (int(w * 0.24), int(h * 0.72)), (int(w * 0.76), int(h * 0.80)), (120, 220, 80), -1)
+    cv2.rectangle(img, (int(w * 0.44), int(h * 0.90)), (int(w * 0.56), int(h * 0.975)), (190, 190, 30), -1)
+
+    _, png = cv2.imencode(".png", img)
+    assert _is_gangrocket_screen(png.tobytes()) is True
 
 
 async def test_dismiss_detail_taps_checkmark(monkeypatch):

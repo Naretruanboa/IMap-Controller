@@ -589,32 +589,39 @@ def _is_gangrocket_screen(png_bytes: bytes) -> bool:
     hsv = cv2.cvtColor(background, cv2.COLOR_BGR2HSV)
     purple = cv2.inRange(hsv, np.array([120, 20, 45]), np.array([170, 210, 230]))
     purple_ratio = cv2.countNonZero(purple) / max(background.shape[0] * background.shape[1], 1)
+    background_gray = cv2.cvtColor(background, cv2.COLOR_BGR2GRAY)
+    dark_ratio = cv2.countNonZero(cv2.inRange(background_gray, 0, 95)) / max(background_gray.size, 1)
 
-    chest = img[int(height * 0.30):int(height * 0.58), int(width * 0.32):int(width * 0.72)]
+    chest = img[int(height * 0.28):int(height * 0.68), int(width * 0.26):int(width * 0.76)]
     chest_hsv = cv2.cvtColor(chest, cv2.COLOR_BGR2HSV)
-    red_low = cv2.inRange(chest_hsv, np.array([0, 80, 80]), np.array([18, 255, 255]))
-    red_high = cv2.inRange(chest_hsv, np.array([165, 80, 80]), np.array([180, 255, 255]))
+    red_low = cv2.inRange(chest_hsv, np.array([0, 65, 70]), np.array([20, 255, 255]))
+    red_high = cv2.inRange(chest_hsv, np.array([160, 65, 70]), np.array([180, 255, 255]))
     red_ratio = cv2.countNonZero(red_low | red_high) / max(chest.shape[0] * chest.shape[1], 1)
 
-    battle = img[int(height * 0.70):int(height * 0.84), int(width * 0.20):int(width * 0.82)]
+    battle = img[int(height * 0.68):int(height * 0.84), int(width * 0.18):int(width * 0.84)]
     battle_hsv = cv2.cvtColor(battle, cv2.COLOR_BGR2HSV)
-    green = cv2.inRange(battle_hsv, np.array([35, 55, 110]), np.array([95, 255, 255]))
+    green = cv2.inRange(battle_hsv, np.array([35, 45, 95]), np.array([100, 255, 255]))
     green_ratio = cv2.countNonZero(green) / max(battle.shape[0] * battle.shape[1], 1)
     battle_edges = cv2.countNonZero(cv2.Canny(cv2.cvtColor(battle, cv2.COLOR_BGR2GRAY), 45, 140)) / max(
         battle.shape[0] * battle.shape[1], 1
     )
 
-    close = img[int(height * 0.86):int(height * 0.985), int(width * 0.38):int(width * 0.62)]
+    close = img[int(height * 0.84):int(height * 0.995), int(width * 0.34):int(width * 0.66)]
     close_hsv = cv2.cvtColor(close, cv2.COLOR_BGR2HSV)
-    cyan_green = cv2.inRange(close_hsv, np.array([65, 45, 100]), np.array([100, 255, 255]))
+    cyan_green = cv2.inRange(close_hsv, np.array([60, 35, 80]), np.array([105, 255, 255]))
     close_ratio = cv2.countNonZero(cyan_green) / max(close.shape[0] * close.shape[1], 1)
 
+    text_band = img[int(height * 0.50):int(height * 0.68), :int(width * 0.55)]
+    text_hsv = cv2.cvtColor(text_band, cv2.COLOR_BGR2HSV)
+    orange = cv2.inRange(text_hsv, np.array([8, 70, 90]), np.array([30, 255, 255]))
+    orange_ratio = cv2.countNonZero(orange) / max(text_band.shape[0] * text_band.shape[1], 1)
+
     return (
-        purple_ratio > 0.18
-        and red_ratio > 0.010
-        and green_ratio > 0.20
-        and battle_edges > 0.004
-        and close_ratio > 0.05
+        red_ratio > 0.004
+        and green_ratio > 0.12
+        and battle_edges > 0.003
+        and close_ratio > 0.025
+        and (purple_ratio > 0.08 or dark_ratio > 0.28 or orange_ratio > 0.004)
     )
 
 
@@ -1083,7 +1090,72 @@ async def _get_touch_info(serial: str) -> tuple[str, int, int]:
     return dev, max_x, max_y
 
 
-def _build_curveball_script(dev: str, max_x: int, max_y: int, width: int, height: int, strength: float) -> str:
+def _estimate_throw_ball_center(png_bytes: bytes, width: int, height: int) -> tuple[int, int]:
+    """Estimate the visible throw ball center so low/oversized encounter balls still start on the ball."""
+    fallback = (int(0.50 * width), int(0.80 * height))
+    try:
+        arr = np.frombuffer(png_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except Exception:
+        return fallback
+    if img is None or img.size == 0:
+        return fallback
+
+    y0, y1 = int(height * 0.66), int(height * 0.97)
+    x0, x1 = int(width * 0.24), int(width * 0.76)
+    roi = img[y0:y1, x0:x1]
+    if roi.size == 0:
+        return fallback
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    red = cv2.inRange(hsv, np.array([0, 65, 60]), np.array([15, 255, 255])) | cv2.inRange(
+        hsv, np.array([160, 65, 60]), np.array([180, 255, 255])
+    )
+    yellow = cv2.inRange(hsv, np.array([18, 60, 70]), np.array([42, 255, 255]))
+    blue = cv2.inRange(hsv, np.array([92, 60, 50]), np.array([140, 255, 255]))
+    white = cv2.inRange(hsv, np.array([0, 0, 155]), np.array([180, 85, 255]))
+    dark = cv2.inRange(hsv, np.array([0, 0, 0]), np.array([180, 255, 75]))
+    mask = red | yellow | blue | white | dark
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((13, 13), np.uint8))
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_area = max(160, int(width * height * 0.002))
+    candidates = []
+    roi_center_x = (x1 - x0) / 2
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_area:
+            continue
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < width * 0.08 or h < height * 0.05:
+            continue
+        cx = x + w / 2
+        cy = y + h / 2
+        center_penalty = abs(cx - roi_center_x) * height * 0.05
+        candidates.append((area - center_penalty + cy * width * 0.02, x, y, w, h))
+
+    if not candidates:
+        return fallback
+
+    _, x, y, w, h = max(candidates, key=lambda item: item[0])
+    cx = x0 + x + w / 2
+    # Use the lower half of the detected ball footprint as the touch anchor.
+    # Low encounter balls are often partially clipped by the tray/safe area; the
+    # geometric center of the visible mask can sit above the draggable ball body.
+    cy = y0 + y + h * 0.65
+    return int(max(width * 0.35, min(width * 0.65, cx))), int(max(height * 0.72, min(height * 0.93, cy)))
+
+
+def _build_curveball_script(
+    dev: str,
+    max_x: int,
+    max_y: int,
+    width: int,
+    height: int,
+    strength: float,
+    ball_center: tuple[int, int] | None = None,
+) -> str:
     """Build a shell script that performs a 3-second spin charge followed by a curved Bézier arc throw."""
     import math
     import random
@@ -1093,9 +1165,7 @@ def _build_curveball_script(dev: str, max_x: int, max_y: int, width: int, height
         dy = int((y / max(height, 1)) * max_y)
         return max(0, min(max_x, dx)), max(0, min(max_y, dy))
 
-    # Ball center on screen (top half of ball to avoid bottom tray gesture zone)
-    ball_cx = int(0.50 * width)
-    ball_cy = int(0.80 * height)
+    ball_cx, ball_cy = ball_center or (int(0.50 * width), int(0.80 * height))
     spin_radius = int(0.065 * min(width, height))
 
     target_y = int((0.55 - strength * 0.28) * height)
@@ -1190,15 +1260,22 @@ def _build_curveball_script(dev: str, max_x: int, max_y: int, width: int, height
     return "\n".join(cmds)
 
 
-def _build_straight_script(dev: str, max_x: int, max_y: int, width: int, height: int, strength: float) -> str:
+def _build_straight_script(
+    dev: str,
+    max_x: int,
+    max_y: int,
+    width: int,
+    height: int,
+    strength: float,
+    ball_center: tuple[int, int] | None = None,
+) -> str:
     """Build a shell script that performs a fast straight throw swipe."""
     def to_dev(x, y):
         dx = int((x / max(width, 1)) * max_x)
         dy = int((y / max(height, 1)) * max_y)
         return max(0, min(max_x, dx)), max(0, min(max_y, dy))
 
-    ball_cx = int(0.50 * width)
-    ball_cy = int(0.80 * height)
+    ball_cx, ball_cy = ball_center or (int(0.50 * width), int(0.80 * height))
     target_y = int((0.55 - strength * 0.28) * height)
 
     start_x, start_y = to_dev(ball_cx, ball_cy)
@@ -1269,8 +1346,15 @@ async def _ensure_touch_injector(serial: str) -> bool:
     from services.screen_capture import adb_read
 
     base_dir = Path(__file__).resolve().parent.parent / "bin"
-    check = (await adb_read("-s", serial, "shell", "[ -x /data/local/tmp/touch_injector ] && echo 1 || echo 0")).decode().strip()
-    if check == "1":
+    supports_ball_center = (
+        await adb_read(
+            "-s",
+            serial,
+            "shell",
+            "/data/local/tmp/touch_injector -h 2>&1 | grep -q -- '-ball-x' && echo 1 || echo 0",
+        )
+    ).decode().strip()
+    if supports_ball_center == "1":
         return True
 
     arch = (await adb_read("-s", serial, "shell", "uname -m")).decode().strip().lower()
@@ -1308,19 +1392,20 @@ async def throw_ball(body: ThrowBallRequest):
 
     # Screen dimensions from PNG header
     width, height = struct.unpack(">II", png_bytes[16:24])
+    ball_cx, ball_cy = _estimate_throw_ball_center(png_bytes, width, height)
 
     dev, max_x, max_y = await _get_touch_info(body.serial)
     action_name = "curveball" if body.curveball else "straight"
 
     has_native = await _ensure_touch_injector(body.serial)
     if has_native:
-        inj_cmd = f"/data/local/tmp/touch_injector -dev '{dev}' -max-x {max_x} -max-y {max_y} -width {width} -height {height} -action '{action_name}' -strength {body.strength}"
+        inj_cmd = f"/data/local/tmp/touch_injector -dev '{dev}' -max-x {max_x} -max-y {max_y} -width {width} -height {height} -action '{action_name}' -strength {body.strength} -ball-x {ball_cx} -ball-y {ball_cy}"
         await adb_read("-s", body.serial, "shell", inj_cmd)
     else:
         if body.curveball:
-            script = _build_curveball_script(dev, max_x, max_y, width, height, body.strength)
+            script = _build_curveball_script(dev, max_x, max_y, width, height, body.strength, (ball_cx, ball_cy))
         else:
-            script = _build_straight_script(dev, max_x, max_y, width, height, body.strength)
+            script = _build_straight_script(dev, max_x, max_y, width, height, body.strength, (ball_cx, ball_cy))
         cmd = f"cat << 'EOF' > /data/local/tmp/throw.sh\n{script}\nEOF\nsh /data/local/tmp/throw.sh"
         await adb_read("-s", body.serial, "shell", cmd)
 
@@ -1329,6 +1414,7 @@ async def throw_ball(body: ThrowBallRequest):
         "action": action_name,
         "curveball": body.curveball,
         "strength": body.strength,
+        "ball_center": {"x": ball_cx, "y": ball_cy},
     }
 
 

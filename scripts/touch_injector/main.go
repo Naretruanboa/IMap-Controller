@@ -118,9 +118,7 @@ func (inj *Injector) tap(x, y int) {
 	inj.syn()
 }
 
-func (inj *Injector) Curveball(strength float64, curveLeft bool) {
-	ballCx := int(0.50 * float64(inj.width))
-	ballCy := int(0.80 * float64(inj.height))
+func (inj *Injector) Curveball(strength float64, curveLeft bool, ballCx, ballCy int) {
 	spinRadius := int(0.065 * math.Min(float64(inj.width), float64(inj.height)))
 	targetY := int((0.55 - strength*0.28) * float64(inj.height))
 
@@ -211,9 +209,7 @@ func (inj *Injector) Curveball(strength float64, curveLeft bool) {
 	inj.syn()
 }
 
-func (inj *Injector) Straight(strength float64) {
-	ballCx := int(0.50 * float64(inj.width))
-	ballCy := int(0.80 * float64(inj.height))
+func (inj *Injector) Straight(strength float64, ballCx, ballCy int) {
 	targetY := int((0.55 - strength*0.28) * float64(inj.height))
 
 	// Dismiss tray if open
@@ -273,6 +269,8 @@ func main() {
 	action := flag.String("action", "curveball", "Action: curveball or straight")
 	strength := flag.Float64("strength", 0.6, "Throw strength (0.0 - 1.0)")
 	curveLeftFlag := flag.String("curve-dir", "random", "Curve direction: left, right, random")
+	ballX := flag.Int("ball-x", -1, "Throw ball center X in screen pixels; defaults to center")
+	ballY := flag.Int("ball-y", -1, "Throw ball center Y in screen pixels; defaults to 80% height")
 	flag.Parse()
 
 	inj, err := NewInjector(*dev, *maxX, *maxY, *width, *height)
@@ -282,6 +280,13 @@ func main() {
 	}
 	defer inj.Close()
 
+	if *ballX < 0 {
+		*ballX = int(0.50 * float64(inj.width))
+	}
+	if *ballY < 0 {
+		*ballY = int(0.80 * float64(inj.height))
+	}
+
 	if *action == "curveball" {
 		curveLeft := rand.Float64() < 0.5
 		if *curveLeftFlag == "left" {
@@ -289,9 +294,9 @@ func main() {
 		} else if *curveLeftFlag == "right" {
 			curveLeft = false
 		}
-		inj.Curveball(*strength, curveLeft)
+		inj.Curveball(*strength, curveLeft, *ballX, *ballY)
 	} else if *action == "straight" {
-		inj.Straight(*strength)
+		inj.Straight(*strength, *ballX, *ballY)
 	} else {
 		fmt.Fprintf(os.Stderr, "Unknown action: %s\n", *action)
 		os.Exit(1)
